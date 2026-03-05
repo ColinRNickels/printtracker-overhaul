@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .extensions import db
 
@@ -44,11 +44,19 @@ class PrintJob(db.Model):
     instructor = db.Column(db.String(120), nullable=True)
     department = db.Column(db.String(120), nullable=True)
     pi_name = db.Column(db.String(120), nullable=True)
+    location = db.Column(db.String(120), nullable=True)
     notes = db.Column(db.Text, nullable=True)
     estimated_minutes = db.Column(db.Integer, nullable=True)
 
-    status = db.Column(db.String(32), nullable=False, default=JOB_STATUS_IN_PROGRESS, index=True)
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    status = db.Column(
+        db.String(32), nullable=False, default=JOB_STATUS_IN_PROGRESS, index=True
+    )
+    created_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
     completed_at = db.Column(db.DateTime, nullable=True)
     completed_by = db.Column(db.String(120), nullable=True)
     completion_notes = db.Column(db.Text, nullable=True)
@@ -57,14 +65,16 @@ class PrintJob(db.Model):
     email_error = db.Column(db.Text, nullable=True)
     email_sent_at = db.Column(db.DateTime, nullable=True)
 
-    def mark_completed(self, *, outcome: str, completed_by: str, completion_notes: str | None) -> None:
+    def mark_completed(
+        self, *, outcome: str, completed_by: str, completion_notes: str | None
+    ) -> None:
         if outcome == JOB_STATUS_FINISHED:
             self.status = JOB_STATUS_FINISHED
         else:
             self.status = JOB_STATUS_FAILED
         self.completed_by = completed_by
         self.completion_notes = completion_notes or None
-        self.completed_at = datetime.utcnow()
+        self.completed_at = datetime.now(timezone.utc)
 
     @property
     def is_completed(self) -> bool:
@@ -91,6 +101,6 @@ class AppSetting(db.Model):
     updated_at = db.Column(
         db.DateTime,
         nullable=False,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
     )

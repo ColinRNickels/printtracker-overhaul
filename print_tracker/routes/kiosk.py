@@ -3,7 +3,16 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from flask import Blueprint, abort, current_app, flash, render_template, request, send_file, url_for
+from flask import (
+    Blueprint,
+    abort,
+    current_app,
+    flash,
+    render_template,
+    request,
+    send_file,
+    url_for,
+)
 
 from ..extensions import db
 from ..models import (
@@ -25,6 +34,34 @@ CATEGORY_OPTIONS = [
     (JOB_CATEGORY_COURSE, "Academic"),
     (JOB_CATEGORY_RESEARCH, "Research"),
 ]
+
+
+def build_label_kwargs(job) -> dict:
+    """Build the keyword arguments for create_and_print_label.
+
+    Shared between kiosk registration and staff reprint to avoid
+    duplicating ~15 config/settings lookups.
+    """
+    operational_settings = get_operational_settings()
+    completion_url = build_staff_completion_url(job.label_code)
+    return dict(
+        job=job,
+        completion_url=completion_url,
+        output_dir=current_app.config["LABEL_OUTPUT_DIR"],
+        mode=current_app.config["LABEL_PRINT_MODE"],
+        queue_name=current_app.config["LABEL_PRINTER_QUEUE"],
+        stock=current_app.config["LABEL_STOCK"],
+        dpi=current_app.config["LABEL_DPI"],
+        qr_payload_mode=operational_settings["qr_payload_mode"],
+        qr_size_inch=current_app.config["LABEL_QR_SIZE_INCH"],
+        label_orientation=current_app.config["LABEL_ORIENTATION"],
+        brand_text=current_app.config["LABEL_BRAND_TEXT"],
+        brand_logo_path=current_app.config["LABEL_BRAND_LOGO_PATH"],
+        cups_media=current_app.config["LABEL_CUPS_MEDIA"],
+        cups_extra_options=current_app.config["LABEL_CUPS_EXTRA_OPTIONS"],
+        save_label_files=operational_settings["save_label_files"],
+        cleanup_keep_days=operational_settings["label_retention_days"],
+    )
 
 
 def _generate_label_code() -> str:
@@ -131,6 +168,7 @@ def register():
             instructor=form["instructor"] or None,
             department=form["department"] or None,
             pi_name=form["pi_name"] or None,
+            location=current_app.config["DEFAULT_PRINTER_NAME"],
             notes=None,
         )
         db.session.add(job)
@@ -143,27 +181,8 @@ def register():
                 job.label_code,
                 sync_error,
             )
-        operational_settings = get_operational_settings()
 
-        completion_url = build_staff_completion_url(job.label_code)
-        label_result = create_and_print_label(
-            job=job,
-            completion_url=completion_url,
-            output_dir=current_app.config["LABEL_OUTPUT_DIR"],
-            mode=current_app.config["LABEL_PRINT_MODE"],
-            queue_name=current_app.config["LABEL_PRINTER_QUEUE"],
-            stock=current_app.config["LABEL_STOCK"],
-            dpi=current_app.config["LABEL_DPI"],
-            qr_payload_mode=operational_settings["qr_payload_mode"],
-            qr_size_inch=current_app.config["LABEL_QR_SIZE_INCH"],
-            label_orientation=current_app.config["LABEL_ORIENTATION"],
-            brand_text=current_app.config["LABEL_BRAND_TEXT"],
-            brand_logo_path=current_app.config["LABEL_BRAND_LOGO_PATH"],
-            cups_media=current_app.config["LABEL_CUPS_MEDIA"],
-            cups_extra_options=current_app.config["LABEL_CUPS_EXTRA_OPTIONS"],
-            save_label_files=operational_settings["save_label_files"],
-            cleanup_keep_days=operational_settings["label_retention_days"],
-        )
+        label_result = create_and_print_label(**build_label_kwargs(job))
 
         return render_template(
             "kiosk_success.html",
@@ -185,7 +204,11 @@ def qr_code_image(label_code: str):
     job = PrintJob.query.filter_by(label_code=label_code.upper()).first_or_404()
     operational_settings = get_operational_settings()
     completion_url = build_staff_completion_url(job.label_code)
-    payload = completion_url if operational_settings["qr_payload_mode"] == "url" else job.label_code
+    payload = (
+        completion_url
+        if operational_settings["qr_payload_mode"] == "url"
+        else job.label_code
+    )
     image = build_qr_image(payload, size=320)
     image_bytes = io.BytesIO()
     image.save(image_bytes, format="PNG")
@@ -196,7 +219,9 @@ def qr_code_image(label_code: str):
 @bp.route("/label-preview/<label_code>.png")
 def label_preview(label_code: str):
     PrintJob.query.filter_by(label_code=label_code.upper()).first_or_404()
-    label_path = (Path(current_app.config["LABEL_OUTPUT_DIR"]) / f"{label_code.upper()}.png").resolve()
+    label_path = (
+        Path(current_app.config["LABEL_OUTPUT_DIR"]) / f"{label_code.upper()}.png"
+    ).resolve()
     if not label_path.exists():
         abort(404)
     return send_file(label_path, mimetype="image/png")

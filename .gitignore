@@ -1,6 +1,7 @@
 .venv/
 __pycache__/
 *.pyc
+.env
 instance/print_tracker.db
 labels/*.png
 *.log

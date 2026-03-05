@@ -2,131 +2,226 @@
 
 ## Snapshot
 
-- Date: 2026-03-04
+- Date: 2025-07-25
 - Repo: `/Users/crnickel/Dev/Print Tracker`
 - Branch: current working branch with uncommitted local changes
-- Current dirty files (expected):
-  - `README.md`
-  - `print_tracker/routes/staff.py`
-  - `print_tracker/static/app.css`
-  - `print_tracker/templates/base.html`
-  - `print_tracker/templates/staff_login.html`
-  - `scripts/deploy_rpi.sh`
+- Python: 3.12+ with venv at `.venv/`
 
 ## Product Summary
 
-Flask-based makerspace print tracker with three major surfaces:
+Flask-based 3D-print tracking system for NC State University Libraries
+makerspaces (Makerspace and Maker Studio). Phone-first design — patrons
+register prints on their own phones via a QR code poster, and staff
+complete jobs by scanning the label QR from their phones.
 
-1. **Kiosk** (`/kiosk/register`): patrons create print jobs and print labels.
-2. **Staff** (`/staff/`): password-protected completion workflow + settings + reprint.
-3. **Reports** (`/reports/monthly`): monthly metrics, charts, CSV export.
+Data lives in SQLite (fast local operations, WAL mode) with Google Sheets
+as the durable external record. Email notifications go through the Gmail
+API. A Cloudflare Tunnel provides public HTTPS so students on campus Wi-Fi
+can reach the Pi without IT involvement.
 
-Data is SQLite via SQLAlchemy, intentionally flat for CSV and Google Sheets friendliness.
+## Architecture
 
-## Architecture Map
+### MVP: Pi-only with Cloudflare Tunnel
 
-### App setup
+```
+Student phone (campus Wi-Fi)
+        │  HTTPS
+        ▼
+┌──────────────────────────────┐
+│  Cloudflare Tunnel (free)    │
+│  stable public URL           │
+└──────────┬───────────────────┘
+           │  localhost:5000
+           ▼
+┌──────────────────────────┐
+│  Raspberry Pi            │
+│  Flask + gunicorn        │
+│  SQLite (WAL mode)       │
+│  CUPS → Brother QL-800   │
+│  Gmail API + Sheets sync │
+└──────────────────────────┘
+```
 
-- `run.py` bootstraps Flask app.
-- `print_tracker/__init__.py`:
-  - loads `.env`
-  - normalizes SQLite and path settings
-  - `db.create_all()` on startup
-  - applies lightweight schema upgrades for added columns (`department`, `pi_name`)
+Each makerspace location runs its own Pi + tunnel. The campus network has
+client isolation enabled, so direct Pi-to-phone routing is not possible
+without the tunnel.
 
-### Data model
+### Future: server + Pi print relays
 
-- `print_tracker/models.py`
-  - `PrintJob` table (label code, patron/file/type data, status, completion metadata, email metadata)
-  - `AppSetting` table for runtime toggles
+Flask app moves to a university server. Each Pi becomes a lightweight
+print agent that polls the server for pending labels. A `location` field
+is added to the model and a location picker to the registration form. One
+instance, one URL, one Google Sheet for all locations.
+
+## App Structure
+
+### Startup
+
+- `run.py` → `create_app()` in `print_tracker/__init__.py`
+- Loads `.env`, normalizes paths, creates DB + schema upgrades
+- SQLite WAL mode enabled on every connection via `engine.connect()` event
+
+### Data model (`print_tracker/models.py`)
+
+- `PrintJob` — label code, patron info, file name, category, status,
+  completion metadata, email tracking, `location` column
+- `AppSetting` — runtime key/value toggles (email, label saving, etc.)
+- All datetime columns use timezone-aware UTC (`datetime.now(timezone.utc)`)
 
 ### Routes
 
-- `print_tracker/routes/kiosk.py`
-  - register job
-  - generate timestamp-sequence IDs (`PT-YYYYMMDD-HHMMSS-##`)
-  - print label
-  - show success page
-- `print_tracker/routes/staff.py`
-  - password gate via session
-  - scan shortcut, completion page, reprint
-  - runtime setting updates
-  - QR login redirect safety handling
-- `print_tracker/routes/reports.py`
-  - monthly report page
-  - monthly CSV export
+| Blueprint | Prefix | File | Purpose |
+|-----------|--------|------|---------|
+| `kiosk` | `/kiosk` | `routes/kiosk.py` | Registration form, QR images, label preview |
+| `staff` | `/staff` | `routes/staff.py` | Login, dashboard, scan, completion, reprint, settings |
+| `reports` | `/reports` | `routes/reports.py` | Monthly report page + CSV export |
 
 ### Services
 
-- `print_tracker/services/label_printer.py`
-  - label rendering (human-priority layout)
-  - CUPS submit
-  - optional saved label files + retention cleanup
-- `print_tracker/services/runtime_settings.py`
-  - runtime staff settings from `AppSetting`
-- `print_tracker/services/notifier.py`
-  - SMTP / Gmail API completion email
-- `print_tracker/services/google_api.py`
-  - OAuth refresh-token based Google API client construction
-- `print_tracker/services/sheets_sync.py`
-  - append/update job rows in Google Sheets
-- `print_tracker/services/reports.py`
-  - report summaries + chart datasets
+| Module | Purpose |
+|--------|---------|
+| `label_printer.py` | PIL label rendering + CUPS print submission |
+| `runtime_settings.py` | Read/write `AppSetting` toggles |
+| `notifier.py` | Email via Gmail API / SMTP / auto-fallback |
+| `google_api.py` | OAuth refresh-token Google API client builder |
+| `sheets_sync.py` | Append/update rows in Google Sheets (includes Location column) |
+| `reports.py` | Report summaries + Chart.js datasets |
+| `qr_links.py` | Build staff completion URLs for QR codes |
 
-## Deploy and Operations
+### Templates
 
-### Primary deploy script
+| File | Surface |
+|------|---------|
+| `base.html` | Shared layout — nav hidden on kiosk routes on phone |
+| `kiosk_register.html` | Patron registration form (phone portrait) |
+| `kiosk_success.html` | Post-registration success + label preview |
+| `staff_login.html` | Password gate |
+| `staff_dashboard.html` | In-progress + completed tables, settings |
+| `staff_complete.html` | Mark job Finished / Failed |
+| `reports_monthly.html` | Charts + tables with CSV export |
+| `email_success.txt` / `email_failure.txt` | Notification templates |
 
-- `scripts/deploy_rpi.sh`
-- Handles:
-  - apt package install (auto-detects `chromium` vs `chromium-browser`)
-  - virtualenv setup (now validates and rebuilds corrupted `.venv`)
-  - `.env` writes
-  - DB init
-  - systemd service creation
-  - AP configuration via NetworkManager (`printerkiosk` default)
-  - Chromium kiosk autostart desktop entry
-  - optional Google OAuth setup prompt
+### CSS (`print_tracker/static/app.css`)
 
-### Google OAuth helper
+Mobile-first responsive design:
+- Base styles = phone portrait (single-column, 48px+ touch targets)
+- `@media (min-width: 768px)` = laptop (two-column grids, three-column
+  type cards, 12-column chart grid)
 
-- `scripts/google_oauth_bootstrap.py`
-- Gets refresh token for Gmail + Sheets and prints `.env` snippet.
+## Config (`print_tracker/config.py`)
 
-## Recently Implemented Changes (Important)
+All configuration is via environment variables loaded from `.env`. Key
+additions:
 
-1. **Kiosk readability increased**
-   - Large font sizes and larger controls on `/kiosk/register`.
-   - Portrait kiosk layout no longer locked to keyboard-focused reflow constraints.
-   - File: `print_tracker/static/app.css`
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `DEFAULT_PRINTER_NAME` | `Makerspace` | Also used as the Location value in Sheets |
+| `KIOSK_BASE_URL` | `http://localhost:5000` | Set to tunnel URL for QR codes |
+| `LABEL_PRINT_MODE` | `mock` | `mock` or `cups` |
 
-2. **Staff QR first-login redirect hardening**
-   - Added sanitization for `next` URL on login.
-   - Login timeout auto-return disabled for QR-driven completion paths (`/staff/s/...`, `/staff/complete/...`).
-   - Files:
-     - `print_tracker/routes/staff.py`
-     - `print_tracker/templates/staff_login.html`
+Full reference in `README.md` §7.
 
-3. **Kiosk nav simplification**
-   - Reports link hidden when on kiosk routes.
-   - File: `print_tracker/templates/base.html`
+## Google Sheets Sync
 
-4. **Deploy script hardening and UX updates**
-   - Chromium package detection fix.
-   - Google OAuth setup prompt + env write integration.
-   - Corrupted `.venv` detection and rebuild logic.
-   - File: `scripts/deploy_rpi.sh`
+- Sync on both registration and completion
+- Headers (21 columns): PrintID, CreatedAt, CompletedAt, Status,
+  StatusLabel, ProjectType, ProjectTypeLabel, FileName, UserName,
+  UserEmail, CourseNumber, Instructor, Department, PI, CompletedBy,
+  CompletionNotes, EmailStatus, EmailError, EmailSentAt, PrinterName,
+  **Location**
+- Location value comes from `DEFAULT_PRINTER_NAME` config
+- Sheet and headers are created automatically on first sync
 
-5. **Docs refresh**
-   - README rewritten to match current implementation.
-   - File: `README.md`
+## Deploy
+
+### Pi deploy
+
+```bash
+./scripts/deploy_rpi.sh
+```
+
+See `README.md` §3 for full instructions.
+
+### Cloudflare Tunnel
+
+```bash
+# Quick test (temporary URL):
+cloudflared tunnel --url http://localhost:5000
+
+# Permanent (free account):
+cloudflared tunnel login
+cloudflared tunnel create print-tracker
+# → configure ~/.cloudflared/config.yml
+sudo cloudflared service install
+sudo systemctl enable --now cloudflared
+```
+
+See `README.md` §4 for the complete walkthrough.
+
+### Google OAuth bootstrap
+
+Run on a machine with a browser (laptop recommended):
+
+```bash
+python scripts/google_oauth_bootstrap.py \
+  --client-secrets ~/Downloads/client_secret.json \
+  --gmail-sender makerspace@ncsu.edu
+```
+
+Copy the printed env values into the Pi's `.env`.
+
+## Recently Implemented Changes
+
+1. **Phone-first architecture**
+   - Cloudflare Tunnel for public HTTPS access from campus Wi-Fi
+   - Responsive mobile-first CSS (phone portrait + laptop landscape)
+   - Viewport meta with `viewport-fit=cover` for notched phones
+   - Nav hidden on kiosk routes in phone view
+   - Tables wrapped in `.table-wrap` for horizontal scroll on phones
+
+2. **Multi-location support**
+   - `DEFAULT_PRINTER_NAME` config doubles as the location name
+   - `Location` column in Google Sheets headers and row data
+   - `location` column on `PrintJob` model (populated from config)
+   - MVP: separate Pi per location; future: location picker
+
+3. **SQLite WAL mode**
+   - Enabled on every connection via SQLAlchemy event listener
+   - Better concurrent read performance for staff + patron access
+
+4. **Timezone-aware datetimes**
+   - All `datetime.utcnow()` replaced with `datetime.now(timezone.utc)`
+   - Column defaults, `mark_completed()`, email timestamps
+
+5. **DRY label printing**
+   - `build_label_kwargs(job)` helper extracts config + runtime settings
+   - Shared between kiosk registration and staff reprint (was ~15
+     duplicated keyword arguments)
+
+6. **README rewrite**
+   - Full deployment docs: Pi setup, Cloudflare Tunnel, Google OAuth
+   - Architecture diagram and roadmap
+   - Configuration reference tables
+   - Troubleshooting guide
 
 ## Known Risks / Follow-up Ideas
 
-- **Credentials in shell history**: AP and OAuth values can end up in shell history if passed via CLI flags.
-- **No migration framework**: schema upgrades are manual in app startup (`_apply_schema_upgrades`).
-- **`STAFF_PASSWORD` plain text**: fine for MVP, but should move to hashed auth for production hardening.
-- **AP mode assumptions**: script assumes NetworkManager AP flow works on target Pi image.
+- **No migration framework**: Schema upgrades are manual `ALTER TABLE` in
+  `_apply_schema_upgrades()`. Consider Flask-Migrate when schema changes
+  become frequent.
+- **`STAFF_PASSWORD` plain text**: Acceptable for MVP. Move to hashed
+  auth or SSO for hardening.
+- **Credentials in shell history**: AP and OAuth values passed via CLI
+  flags may end up in shell history.
+- **Deploy script still has AP/kiosk options**: These work but are not
+  needed for the phone-first workflow. Pass `--no-ap --no-kiosk-autostart`
+  to skip.
+- **Single-Pi reliability**: No redundancy. If the Pi dies, prints are
+  tracked only in Google Sheets until a replacement is set up. Keep an
+  SD card image backup.
+- **OAuth token expiry**: Google refresh tokens can expire if unused for
+  6 months or if the OAuth app is in "testing" mode (7-day expiry).
+  Publish the app or use a Workspace account for long-lived tokens.
 
 ## Quick Validation Checklist
 

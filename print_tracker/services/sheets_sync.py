@@ -28,6 +28,7 @@ SHEET_HEADERS = [
     "EmailError",
     "EmailSentAt",
     "PrinterName",
+    "Location",
 ]
 
 
@@ -39,11 +40,16 @@ def sync_job_to_google_sheet(job: PrintJob) -> tuple[bool, str | None]:
     if not spreadsheet_id:
         return False, "GOOGLE_SHEETS_SPREADSHEET_ID is not configured."
 
-    worksheet = current_app.config.get("GOOGLE_SHEETS_WORKSHEET", "PrintJobs").strip() or "PrintJobs"
+    worksheet = (
+        current_app.config.get("GOOGLE_SHEETS_WORKSHEET", "PrintJobs").strip()
+        or "PrintJobs"
+    )
 
     try:
         service = build_google_service("sheets", "v4", scopes=[GOOGLE_SHEETS_SCOPE])
-        _ensure_sheet_exists(service, spreadsheet_id=spreadsheet_id, worksheet=worksheet)
+        _ensure_sheet_exists(
+            service, spreadsheet_id=spreadsheet_id, worksheet=worksheet
+        )
         _ensure_headers(service, spreadsheet_id=spreadsheet_id, worksheet=worksheet)
         row_number = _find_row_number_by_print_id(
             service,
@@ -62,7 +68,9 @@ def sync_job_to_google_sheet(job: PrintJob) -> tuple[bool, str | None]:
                 valueInputOption="RAW",
                 body={"values": row_values},
             ).execute()
-            current_app.logger.info("Updated Google Sheets row for %s (row %s)", job.label_code, row_number)
+            current_app.logger.info(
+                "Updated Google Sheets row for %s (row %s)", job.label_code, row_number
+            )
         else:
             service.spreadsheets().values().append(
                 spreadsheetId=spreadsheet_id,
@@ -100,6 +108,7 @@ def _build_row(job: PrintJob) -> list[str]:
         job.email_error or "",
         _to_iso(job.email_sent_at),
         job.printer_name or "",
+        current_app.config.get("DEFAULT_PRINTER_NAME", ""),
     ]
 
 
@@ -113,10 +122,14 @@ def _sheet_range(worksheet: str, a1_range: str) -> str:
 
 
 def _ensure_sheet_exists(service, *, spreadsheet_id: str, worksheet: str) -> None:
-    metadata = service.spreadsheets().get(
-        spreadsheetId=spreadsheet_id,
-        fields="sheets(properties(title))",
-    ).execute()
+    metadata = (
+        service.spreadsheets()
+        .get(
+            spreadsheetId=spreadsheet_id,
+            fields="sheets(properties(title))",
+        )
+        .execute()
+    )
     titles = {
         sheet.get("properties", {}).get("title", "")
         for sheet in metadata.get("sheets", [])
@@ -131,10 +144,15 @@ def _ensure_sheet_exists(service, *, spreadsheet_id: str, worksheet: str) -> Non
 
 
 def _ensure_headers(service, *, spreadsheet_id: str, worksheet: str) -> None:
-    result = service.spreadsheets().values().get(
-        spreadsheetId=spreadsheet_id,
-        range=_sheet_range(worksheet, "1:1"),
-    ).execute()
+    result = (
+        service.spreadsheets()
+        .values()
+        .get(
+            spreadsheetId=spreadsheet_id,
+            range=_sheet_range(worksheet, "1:1"),
+        )
+        .execute()
+    )
     existing_values = result.get("values", [])
     existing_headers = existing_values[0] if existing_values else []
     if existing_headers == SHEET_HEADERS:
@@ -155,10 +173,15 @@ def _find_row_number_by_print_id(
     worksheet: str,
     label_code: str,
 ) -> int | None:
-    result = service.spreadsheets().values().get(
-        spreadsheetId=spreadsheet_id,
-        range=_sheet_range(worksheet, "A2:A"),
-    ).execute()
+    result = (
+        service.spreadsheets()
+        .values()
+        .get(
+            spreadsheetId=spreadsheet_id,
+            range=_sheet_range(worksheet, "A2:A"),
+        )
+        .execute()
+    )
     rows = result.get("values", [])
     target = label_code.strip().upper()
     for index, row in enumerate(rows, start=2):

@@ -17,6 +17,7 @@ AP_PSK="printerkiosk"
 AP_HIDDEN=0
 AP_IP="192.168.4.1"
 KIOSK_AUTOSTART=1
+STAFF_PASSWORD=""
 LOGO_SOURCE=""
 NON_INTERACTIVE=0
 SKIP_APT=0
@@ -49,6 +50,7 @@ Options:
   --ap-hidden              Hide AP SSID broadcast.
   --no-ap                  Skip AP setup.
   --no-kiosk-autostart     Skip Chromium kiosk autostart setup.
+  --staff-password PASS     Staff dashboard password (required).
   --setup-google-oauth     Run Google OAuth setup during deploy.
   --no-google-oauth        Skip Google OAuth setup during deploy.
   --google-client-secrets PATH
@@ -435,6 +437,10 @@ while [[ $# -gt 0 ]]; do
       KIOSK_AUTOSTART=0
       shift
       ;;
+    --staff-password)
+      STAFF_PASSWORD="$2"
+      shift 2
+      ;;
     --setup-google-oauth)
       SETUP_GOOGLE_OAUTH=1
       shift
@@ -494,6 +500,24 @@ done
 
 if [[ "${NON_INTERACTIVE}" -eq 0 ]]; then
   log "Interactive setup. Press Enter to accept defaults."
+  if [[ -z "${STAFF_PASSWORD}" ]]; then
+    while true; do
+      read -r -s -p "Staff dashboard password (required): " STAFF_PASSWORD
+      printf '\n'
+      if [[ -z "${STAFF_PASSWORD}" ]]; then
+        printf 'Password cannot be empty.\n'
+        continue
+      fi
+      read -r -s -p "Confirm password: " pw_confirm
+      printf '\n'
+      if [[ "${STAFF_PASSWORD}" != "${pw_confirm}" ]]; then
+        printf 'Passwords do not match. Try again.\n'
+        STAFF_PASSWORD=""
+        continue
+      fi
+      break
+    done
+  fi
   SERVICE_USER="$(prompt_default "Service user" "${SERVICE_USER}")"
   SERVICE_GROUP="$(prompt_default "Service group" "${SERVICE_GROUP}")"
   PORT="$(prompt_default "Web app port" "${PORT}")"
@@ -532,6 +556,7 @@ fi
 
 [[ "${PRINT_MODE}" == "cups" || "${PRINT_MODE}" == "mock" ]] || die "Print mode must be cups or mock."
 [[ "${PORT}" =~ ^[0-9]+$ ]] || die "Port must be a number."
+[[ -n "${STAFF_PASSWORD}" ]] || die "Staff password is required. Use --staff-password or run in interactive mode."
 if [[ "${SETUP_AP}" -eq 1 ]]; then
   [[ -n "${AP_SSID}" ]] || die "AP SSID cannot be empty."
   (( ${#AP_PSK} >= 8 )) || die "AP password must be at least 8 characters."
@@ -697,10 +722,7 @@ if [[ -f "${LOGO_DEST}" ]]; then
 fi
 set_env_value "${ENV_FILE}" "DEFAULT_PRINTER_NAME" "Makerspace"
 
-EXISTING_STAFF_PASSWORD="$(get_env_value "${ENV_FILE}" "STAFF_PASSWORD")"
-if [[ -z "${EXISTING_STAFF_PASSWORD}" ]]; then
-  set_env_value "${ENV_FILE}" "STAFF_PASSWORD" "staffpw"
-fi
+set_env_value "${ENV_FILE}" "STAFF_PASSWORD" "${STAFF_PASSWORD}"
 
 GOOGLE_OAUTH_CONFIGURED=0
 if [[ "${SETUP_GOOGLE_OAUTH}" -eq 1 ]]; then
@@ -818,7 +840,6 @@ Useful commands:
 - Restart app: sudo systemctl restart ${SERVICE_NAME}
 
 Important post-deploy checks:
-- Change STAFF_PASSWORD in ${ENV_FILE} from default "staffpw", then restart the service.
 - Confirm KIOSK_BASE_URL in ${ENV_FILE} is reachable from staff devices for QR scans.
 
 EOF

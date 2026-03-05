@@ -2,10 +2,18 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from flask import Flask, redirect, url_for
-from sqlalchemy import inspect, text
-from sqlalchemy.engine import make_url
+from sqlalchemy import event, inspect, text
+from sqlalchemy.engine import Engine, make_url
 
 from .extensions import db
+
+
+@event.listens_for(Engine, "connect")
+def _set_sqlite_wal(dbapi_connection, connection_record):
+    """Enable WAL mode for SQLite for better concurrent read performance."""
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.close()
 
 
 def _apply_schema_upgrades() -> None:
@@ -13,13 +21,23 @@ def _apply_schema_upgrades() -> None:
     if "print_jobs" not in inspector.get_table_names():
         return
 
-    existing_columns = {column["name"] for column in inspector.get_columns("print_jobs")}
+    existing_columns = {
+        column["name"] for column in inspector.get_columns("print_jobs")
+    }
     upgrade_statements = []
 
     if "department" not in existing_columns:
-        upgrade_statements.append("ALTER TABLE print_jobs ADD COLUMN department VARCHAR(120)")
+        upgrade_statements.append(
+            "ALTER TABLE print_jobs ADD COLUMN department VARCHAR(120)"
+        )
     if "pi_name" not in existing_columns:
-        upgrade_statements.append("ALTER TABLE print_jobs ADD COLUMN pi_name VARCHAR(120)")
+        upgrade_statements.append(
+            "ALTER TABLE print_jobs ADD COLUMN pi_name VARCHAR(120)"
+        )
+    if "location" not in existing_columns:
+        upgrade_statements.append(
+            "ALTER TABLE print_jobs ADD COLUMN location VARCHAR(120)"
+        )
 
     if not upgrade_statements:
         return

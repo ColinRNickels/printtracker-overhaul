@@ -1,7 +1,16 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
-from flask import Blueprint, current_app, flash, redirect, render_template, request, session, url_for
+from flask import (
+    Blueprint,
+    current_app,
+    flash,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 
 from ..extensions import db
 from ..models import (
@@ -10,9 +19,9 @@ from ..models import (
     JOB_STATUS_IN_PROGRESS,
     PrintJob,
 )
+from ..routes.kiosk import build_label_kwargs
 from ..services.label_printer import cleanup_saved_labels, create_and_print_label
 from ..services.notifier import send_completion_email
-from ..services.qr_links import build_staff_completion_url
 from ..services.runtime_settings import (
     KEY_EMAIL_ENABLED,
     KEY_LABEL_RETENTION_DAYS,
@@ -58,7 +67,11 @@ def _sanitize_next_url(value: str) -> str:
         return raw
 
     parsed = urlparse(raw)
-    if parsed.scheme in {"http", "https"} and parsed.netloc and parsed.netloc == request.host:
+    if (
+        parsed.scheme in {"http", "https"}
+        and parsed.netloc
+        and parsed.netloc == request.host
+    ):
         path = parsed.path or "/"
         if parsed.query:
             path = f"{path}?{parsed.query}"
@@ -113,13 +126,10 @@ def logout():
 def dashboard():
     operational_settings = get_operational_settings()
     kiosk_base_url = (current_app.config.get("KIOSK_BASE_URL", "") or "").strip()
-    qr_link_url_warning = (
-        operational_settings["qr_payload_mode"] == "url"
-        and (
-            not kiosk_base_url
-            or "localhost" in kiosk_base_url.lower()
-            or "127.0.0.1" in kiosk_base_url
-        )
+    qr_link_url_warning = operational_settings["qr_payload_mode"] == "url" and (
+        not kiosk_base_url
+        or "localhost" in kiosk_base_url.lower()
+        or "127.0.0.1" in kiosk_base_url
     )
 
     if operational_settings["save_label_files"]:
@@ -136,7 +146,9 @@ def dashboard():
         .all()
     )
     recently_completed = (
-        PrintJob.query.filter(PrintJob.status.in_([JOB_STATUS_FINISHED, JOB_STATUS_FAILED]))
+        PrintJob.query.filter(
+            PrintJob.status.in_([JOB_STATUS_FINISHED, JOB_STATUS_FAILED])
+        )
         .order_by(PrintJob.completed_at.desc())
         .limit(25)
         .all()
@@ -167,8 +179,12 @@ def update_settings():
 
     set_bool_setting(KEY_EMAIL_ENABLED, completion_email_enabled)
     set_bool_setting(KEY_SAVE_LABEL_FILES, save_label_files)
-    set_int_setting(KEY_LABEL_RETENTION_DAYS, label_retention_days, minimum=1, maximum=30)
-    set_choice_setting(KEY_QR_PAYLOAD_MODE, qr_payload_mode, choices={"id", "url"}, fallback="url")
+    set_int_setting(
+        KEY_LABEL_RETENTION_DAYS, label_retention_days, minimum=1, maximum=30
+    )
+    set_choice_setting(
+        KEY_QR_PAYLOAD_MODE, qr_payload_mode, choices={"id", "url"}, fallback="url"
+    )
     db.session.commit()
 
     if save_label_files:
@@ -201,30 +217,14 @@ def scan_shortcut(label_code: str):
 @bp.route("/reprint/<label_code>", methods=["POST"])
 def reprint(label_code: str):
     job = PrintJob.query.filter_by(label_code=label_code.upper()).first_or_404()
-    operational_settings = get_operational_settings()
-    completion_url = build_staff_completion_url(job.label_code)
-    label_result = create_and_print_label(
-        job=job,
-        completion_url=completion_url,
-        output_dir=current_app.config["LABEL_OUTPUT_DIR"],
-        mode=current_app.config["LABEL_PRINT_MODE"],
-        queue_name=current_app.config["LABEL_PRINTER_QUEUE"],
-        stock=current_app.config["LABEL_STOCK"],
-        dpi=current_app.config["LABEL_DPI"],
-        qr_payload_mode=operational_settings["qr_payload_mode"],
-        qr_size_inch=current_app.config["LABEL_QR_SIZE_INCH"],
-        label_orientation=current_app.config["LABEL_ORIENTATION"],
-        brand_text=current_app.config["LABEL_BRAND_TEXT"],
-        brand_logo_path=current_app.config["LABEL_BRAND_LOGO_PATH"],
-        cups_media=current_app.config["LABEL_CUPS_MEDIA"],
-        cups_extra_options=current_app.config["LABEL_CUPS_EXTRA_OPTIONS"],
-        save_label_files=operational_settings["save_label_files"],
-        cleanup_keep_days=operational_settings["label_retention_days"],
-    )
+    label_result = create_and_print_label(**build_label_kwargs(job))
     if label_result.get("printed"):
         flash(f"Reprint sent for {job.label_code}.", "success")
     else:
-        flash(f"Reprint was not sent for {job.label_code}: {label_result['message']}", "warning")
+        flash(
+            f"Reprint was not sent for {job.label_code}: {label_result['message']}",
+            "warning",
+        )
     return redirect(request.referrer or url_for("staff.dashboard"))
 
 
@@ -264,12 +264,15 @@ def complete_job(label_code: str):
         if operational_settings["completion_email_enabled"]:
             email_status, email_error = send_completion_email(job)
         else:
-            email_status, email_error = "skipped", "Email sending disabled by staff settings."
+            email_status, email_error = (
+                "skipped",
+                "Email sending disabled by staff settings.",
+            )
 
         job.email_status = email_status
         job.email_error = email_error
         if email_status == "sent":
-            job.email_sent_at = datetime.utcnow()
+            job.email_sent_at = datetime.now(timezone.utc)
 
         db.session.commit()
 
