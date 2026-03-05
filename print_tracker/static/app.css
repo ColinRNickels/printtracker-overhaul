@@ -124,6 +124,13 @@ main {
     padding: 1rem;
     box-shadow: 0 6px 16px rgba(0, 0, 0, 0.05);
     margin-bottom: 0.85rem;
+    overflow-wrap: break-word;
+    word-break: break-word;
+}
+
+.panel h2 {
+    overflow-wrap: break-word;
+    word-break: break-word;
 }
 
 /* ================================================================
@@ -378,6 +385,20 @@ button:hover {
     background: #fff;
     padding: 0.35rem 0.7rem;
     cursor: pointer;
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+/* Reset global input styles leaking into radio/checkbox inside pills */
+.option-pill input[type="radio"],
+.option-pill input[type="checkbox"] {
+    width: auto;
+    min-height: 0;
+    padding: 0;
+    border: revert;
+    border-radius: revert;
+    background: revert;
+    box-shadow: none;
 }
 
 .inline-actions {

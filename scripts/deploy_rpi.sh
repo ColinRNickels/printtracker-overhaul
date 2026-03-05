@@ -11,6 +11,8 @@ PRINT_MODE="cups"
 PRINTER_QUEUE="QL800"
 LABEL_MEDIA="DK-1202"
 STAFF_PASSWORD="staffpw"
+SITE_ID=""
+LOCATION_NAME="Makerspace"
 LOGO_SOURCE=""
 NON_INTERACTIVE=0
 SKIP_APT=0
@@ -52,6 +54,9 @@ Options:
   --google-worksheet NAME  Worksheet tab name (default: PrintJobs).
   --setup-tunnel           Set up a Cloudflare quick tunnel (free, no domain needed).
   --no-tunnel              Skip Cloudflare Tunnel setup.
+  --site-id ID             Short site prefix for Print IDs (e.g. HL, PT). Avoids
+                           collisions when multiple Pis sync to the same sheet.
+  --location-name NAME     Human-readable location name (e.g. "Hill Library").
   --logo-source PATH       Optional local PNG path for label logo.
   --skip-apt               Skip apt package install/update.
   --skip-cups              Skip CUPS service setup and printer checks.
@@ -312,6 +317,14 @@ while [[ $# -gt 0 ]]; do
       SETUP_TUNNEL=0
       shift
       ;;
+    --site-id)
+      SITE_ID="$2"
+      shift 2
+      ;;
+    --location-name)
+      LOCATION_NAME="$2"
+      shift 2
+      ;;
     --logo-source)
       LOGO_SOURCE="$2"
       shift 2
@@ -363,8 +376,31 @@ PROJECT_DIR="${DEPLOY_DIR}"
 [[ "${PRINT_MODE}" == "cups" || "${PRINT_MODE}" == "mock" ]] || die "--print-mode must be cups or mock."
 
 if [[ "${NON_INTERACTIVE}" -eq 0 ]]; then
-  log "Interactive setup. Press Enter to accept defaults."
+  cat <<'WELCOME'
+
+========================================================================
+  Print Tracker – Interactive Setup
+========================================================================
+
+  This script will ask a series of questions to configure the app.
+  Each question shows a default value in [brackets]. Press Enter to
+  accept the default, or type a new value.
+
+  Tip: If you're unsure about a question, the default is almost always
+  the right choice. You can change any setting later by editing the
+  .env file in the project directory.
+========================================================================
+
+WELCOME
+
   if [[ -z "${STAFF_PASSWORD}" ]]; then
+    cat <<'PWHELP'
+--- Staff Dashboard Password -------------------------------------------
+This password protects the staff dashboard where you manage print jobs,
+view reports, and change settings. Share it only with authorized staff.
+Pick something memorable but not easily guessed.
+------------------------------------------------------------------------
+PWHELP
     while true; do
       read -r -s -p "Staff dashboard password (required): " STAFF_PASSWORD
       printf '\n'
@@ -382,25 +418,155 @@ if [[ "${NON_INTERACTIVE}" -eq 0 ]]; then
       break
     done
   fi
+
+  cat <<'SVCHELP'
+
+--- Linux Service Account -----------------------------------------------
+The app runs as a background service on this machine. These two settings
+control *which Linux user and group* own that service.
+
+  Service user  – almost always your login name (the default shown).
+                  To check, run:  whoami
+  Service group – almost always the same as the user name.
+
+Unless you have a specific reason to change these, accept the defaults.
+-------------------------------------------------------------------------
+SVCHELP
   SERVICE_USER="$(prompt_default "Service user" "${SERVICE_USER}")"
   SERVICE_GROUP="$(prompt_default "Service group" "${SERVICE_GROUP}")"
+
+  cat <<'PORTHELP'
+
+--- Web App Port --------------------------------------------------------
+The port number the web app listens on (like a channel number). The
+default is 5000. You only need to change this if another program on
+this machine already uses port 5000.
+
+Access the app at:  http://<this-machine's-IP>:<port>
+-------------------------------------------------------------------------
+PORTHELP
   PORT="$(prompt_default "Web app port" "${PORT}")"
+
+  cat <<'PRINTHELP'
+
+--- Printing Setup ------------------------------------------------------
+Print mode:
+  cups  – Print to a real Brother QL label printer connected via USB.
+          Choose this for production use.
+  mock  – Don't actually print anything. Useful for testing or
+          development when no printer is connected.
+
+CUPS queue name:
+  The name of the printer as registered in the CUPS printing system.
+  To see available printers, run:  lpstat -e
+  The default "QL800" matches a standard Brother QL-800.
+
+CUPS media token:
+  The label size code. "DK-1202" is the standard Brother shipping label
+  (62 mm × 100 mm). Only change this if you use a different label stock.
+-------------------------------------------------------------------------
+PRINTHELP
   PRINT_MODE="$(prompt_default "Print mode (cups or mock)" "${PRINT_MODE}")"
   PRINTER_QUEUE="$(prompt_default "CUPS queue name" "${PRINTER_QUEUE}")"
   LABEL_MEDIA="$(prompt_default "CUPS media token" "${LABEL_MEDIA}")"
+
+  cat <<'LOCHELP'
+
+--- Location / Site Identity --------------------------------------------
+If you run Print Tracker on more than one Pi (e.g. different campus
+buildings), each should have a unique location name and site ID so jobs
+can be told apart — especially in the shared Google Sheet.
+
+Location name:
+  A human-readable name for this printer station, e.g. "Hill Library"
+  or "Hunt Library". It appears on labels and in reports.
+
+Site ID (short code):
+  A 2–4 letter prefix added to every Print ID this Pi generates.
+  Examples: HL for Hill Library, HU for Hunt Library.
+  This prevents ID collisions when two Pis create a job at the same
+  second. Leave blank to use the default "PT".
+
+If this is your only Pi, the defaults are fine.
+-------------------------------------------------------------------------
+LOCHELP
+  LOCATION_NAME="$(prompt_default "Location name" "${LOCATION_NAME}")"
+  SITE_ID="$(prompt_default "Site ID (short code, e.g. HL)" "${SITE_ID:-PT}")"
+
   if [[ "${SETUP_TUNNEL}" -lt 0 ]]; then
-    if prompt_yes_no "Set up a Cloudflare quick tunnel for public HTTPS access (free, no domain needed)" "y"; then
+    cat <<'TUNHELP'
+
+--- Cloudflare Quick Tunnel (optional) ----------------------------------
+A Cloudflare tunnel gives your Pi a public HTTPS URL so that people
+outside your local network (e.g. on campus Wi-Fi) can reach the kiosk.
+It's free and requires no domain name or router configuration.
+
+Say YES if the kiosk needs to be reachable from the internet.
+Say NO if it will only be used on the same local network as the Pi.
+
+You can set this up later by re-running the deploy script.
+-------------------------------------------------------------------------
+TUNHELP
+    if prompt_yes_no "Set up a Cloudflare quick tunnel" "y"; then
       SETUP_TUNNEL=1
     else
       SETUP_TUNNEL=0
     fi
   fi
+
   if [[ "${SETUP_GOOGLE_OAUTH}" -lt 0 ]]; then
+    cat <<'GHELP'
+
+--- Google Integration (optional) ---------------------------------------
+This connects the app to Google for two features:
+  1. Email notifications – send pick-up alerts to users via Gmail.
+  2. Sheets sync – log every print job to a Google Spreadsheet.
+
+Both features require OAuth credentials from Google Cloud Console.
+
+If you have a "client_secret*.json" file from Google Cloud, say YES.
+Otherwise say NO; you can configure this later.
+-------------------------------------------------------------------------
+GHELP
     if prompt_yes_no "Configure Google OAuth now (Gmail + Sheets)" "y"; then
       SETUP_GOOGLE_OAUTH=1
+
+      cat <<'CSHELP'
+
+  Path to Google OAuth client JSON:
+    This is a JSON file you download from the Google Cloud Console under
+    APIs & Services → Credentials → OAuth 2.0 Client IDs → Download JSON.
+    It is usually saved to your Downloads folder as "client_secret_<…>.json".
+CSHELP
       GOOGLE_CLIENT_SECRETS="$(prompt_default "Path to Google OAuth client JSON" "${HOME}/Downloads/client_secret.json")"
-      GOOGLE_GMAIL_SENDER="$(prompt_default "Gmail sender address (optional)" "${GOOGLE_GMAIL_SENDER}")"
-      GOOGLE_SPREADSHEET_ID="$(prompt_default "Google Spreadsheet ID (optional now)" "${GOOGLE_SPREADSHEET_ID}")"
+
+      cat <<'GMHELP'
+
+  Gmail sender address:
+    The "From" address that appears on notification emails. This must be
+    a Gmail or Google Workspace address that the OAuth account can send as.
+    Leave the default unless your team uses a different shared mailbox.
+GMHELP
+      GOOGLE_GMAIL_SENDER="$(prompt_default "Gmail sender address" "${GOOGLE_GMAIL_SENDER}")"
+
+      cat <<'GSHELP'
+
+  Google Spreadsheet ID:
+    Open your Google Sheet in a browser. The long string of letters and
+    numbers in the URL between /d/ and /edit is the Spreadsheet ID.
+    Example URL: https://docs.google.com/spreadsheets/d/ABC123xyz/edit
+                                                       ^^^^^^^^^^^
+    You can add this later by editing the .env file if you don't have it yet.
+GSHELP
+      GOOGLE_SPREADSHEET_ID="$(prompt_default "Google Spreadsheet ID (press Enter to skip for now)" "${GOOGLE_SPREADSHEET_ID}")"
+
+      cat <<'GWHELP'
+
+  Google worksheet tab name:
+    The name of the tab (sheet) within the spreadsheet where print jobs
+    are logged. The default is "PrintJobs". Only change this if your
+    spreadsheet uses a different tab name.
+GWHELP
       GOOGLE_WORKSHEET="$(prompt_default "Google worksheet tab" "${GOOGLE_WORKSHEET}")"
     else
       SETUP_GOOGLE_OAUTH=0
@@ -579,7 +745,10 @@ set_env_value "${ENV_FILE}" "LABEL_BRAND_TEXT" "NC State University Libraries Ma
 if [[ -f "${LOGO_DEST}" ]]; then
   set_env_value "${ENV_FILE}" "LABEL_BRAND_LOGO_PATH" "${LOGO_DEST}"
 fi
-set_env_value "${ENV_FILE}" "DEFAULT_PRINTER_NAME" "Makerspace"
+set_env_value "${ENV_FILE}" "DEFAULT_PRINTER_NAME" "${LOCATION_NAME}"
+if [[ -n "${SITE_ID}" ]]; then
+  set_env_value "${ENV_FILE}" "SITE_ID" "${SITE_ID}"
+fi
 
 # Preserve existing go.ncsu.edu token if already set
 EXISTING_GO_TOKEN="$(get_env_value "${ENV_FILE}" "GO_NCSU_API_TOKEN")"

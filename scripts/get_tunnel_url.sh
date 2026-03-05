@@ -21,13 +21,15 @@ fi
 # --- Fallback: read KIOSK_BASE_URL from .env ---
 if [[ -z "${TUNNEL_URL}" && -f "${ENV_FILE}" ]]; then
   TUNNEL_URL="$(python3 - "${ENV_FILE}" <<'PY'
-from pathlib import Path, sys
+from pathlib import Path
+import sys
 env = Path(sys.argv[1])
-for line in env.read_text().splitlines():
-    if line.startswith("KIOSK_BASE_URL="):
-        val = line.split("=", 1)[1].strip()
-        if "trycloudflare.com" in val:
-            print(val)
+if env.exists():
+    for line in env.read_text().splitlines():
+        if line.startswith("KIOSK_BASE_URL="):
+            val = line.split("=", 1)[1].strip()
+            if val and val != "http://localhost:5000":
+                print(val)
             break
 PY
   )" || true

@@ -86,6 +86,7 @@ class Config:
     ).strip()
 
     DEFAULT_PRINTER_NAME = os.environ.get("DEFAULT_PRINTER_NAME", "Makerspace")
+    SITE_ID = os.environ.get("SITE_ID", "").strip().upper()
 
     # go.ncsu.edu short-link settings (updated on tunnel restart)
     GO_NCSU_API_TOKEN = os.environ.get("GO_NCSU_API_TOKEN", "").strip()

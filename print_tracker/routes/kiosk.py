@@ -65,12 +65,15 @@ def build_label_kwargs(job) -> dict:
 
 
 def _generate_label_code() -> str:
-    # Format: PT-YYYYMMDD-HHMMSS-##
-    # Sequence keeps IDs unique even when multiple jobs are created in the same second.
+    # Format: <PREFIX>-YYYYMMDD-HHMMSS-##
+    # PREFIX defaults to "PT" but can be overridden via SITE_ID to avoid
+    # collisions when multiple Pis sync to the same Google Sheet.
+    site_id = current_app.config.get("SITE_ID", "").strip().upper()
+    prefix = site_id if site_id else "PT"
     for _ in range(3):
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         for sequence in range(100):
-            code = f"PT-{timestamp}-{sequence:02d}"
+            code = f"{prefix}-{timestamp}-{sequence:02d}"
             if not PrintJob.query.filter_by(label_code=code).first():
                 return code
         time.sleep(1)
