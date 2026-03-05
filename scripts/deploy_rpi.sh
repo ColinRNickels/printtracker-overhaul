@@ -23,8 +23,7 @@ GOOGLE_GMAIL_SENDER=""
 GOOGLE_SPREADSHEET_ID=""
 GOOGLE_WORKSHEET="PrintJobs"
 SETUP_TUNNEL=-1
-TUNNEL_NAME="print-tracker"
-TUNNEL_HOSTNAME=""
+TUNNEL_TOKEN=""
 
 usage() {
   cat <<'EOF'
@@ -54,8 +53,7 @@ Options:
   --google-worksheet NAME  Worksheet tab name (default: PrintJobs).
   --setup-tunnel           Configure a Cloudflare Tunnel during deploy.
   --no-tunnel              Skip Cloudflare Tunnel setup.
-  --tunnel-name NAME       Tunnel name (default: print-tracker).
-  --tunnel-hostname HOST   Public hostname for the tunnel (e.g. print.example.com).
+  --tunnel-token TOKEN     Tunnel token from Zero Trust dashboard.
   --logo-source PATH       Optional local PNG path for label logo.
   --skip-apt               Skip apt package install/update.
   --skip-cups              Skip CUPS service setup and printer checks.
@@ -316,12 +314,9 @@ while [[ $# -gt 0 ]]; do
       SETUP_TUNNEL=0
       shift
       ;;
-    --tunnel-name)
-      TUNNEL_NAME="$2"
-      shift 2
-      ;;
-    --tunnel-hostname)
-      TUNNEL_HOSTNAME="$2"
+    --tunnel-token)
+      TUNNEL_TOKEN="$2"
+      SETUP_TUNNEL=1
       shift 2
       ;;
     --logo-source)
@@ -403,8 +398,18 @@ if [[ "${NON_INTERACTIVE}" -eq 0 ]]; then
   if [[ "${SETUP_TUNNEL}" -lt 0 ]]; then
     if prompt_yes_no "Set up a Cloudflare Tunnel for public HTTPS access" "y"; then
       SETUP_TUNNEL=1
-      TUNNEL_NAME="$(prompt_default "Tunnel name" "${TUNNEL_NAME}")"
-      TUNNEL_HOSTNAME="$(prompt_default "Public hostname (e.g. print.example.com, or leave blank for quick tunnel)" "${TUNNEL_HOSTNAME}")"
+      printf '\nTo get a tunnel token:\n'
+      printf '  1) Go to https://one.dash.cloudflare.com\n'
+      printf '  2) Navigate to Networks > Tunnels > Create a tunnel\n'
+      printf '  3) Choose "Cloudflared" connector\n'
+      printf '  4) Name the tunnel (e.g. print-tracker)\n'
+      printf '  5) Copy the tunnel token from the install command\n'
+      printf '     (the long string after --token in the command they show)\n\n'
+      read -r -p "Paste your tunnel token: " TUNNEL_TOKEN
+      if [[ -z "${TUNNEL_TOKEN}" ]]; then
+        warn "No tunnel token provided. Skipping tunnel setup."
+        SETUP_TUNNEL=0
+      fi
     else
       SETUP_TUNNEL=0
     fi
@@ -641,63 +646,16 @@ TUNNEL_CONFIGURED=0
 if [[ "${SETUP_TUNNEL}" -lt 0 ]]; then
   SETUP_TUNNEL=0
 fi
-if [[ "${SETUP_TUNNEL}" -eq 1 ]]; then
+if [[ "${SETUP_TUNNEL}" -eq 1 && -n "${TUNNEL_TOKEN}" ]]; then
   if ! command -v cloudflared >/dev/null 2>&1; then
     warn "cloudflared not installed. Tunnel setup skipped."
   else
-    log "Setting up Cloudflare Tunnel..."
-    # Authenticate if not already done
-    if [[ ! -f "${HOME}/.cloudflared/cert.pem" ]]; then
-      log "Authenticating with Cloudflare (a browser URL will be printed)..."
-      cloudflared tunnel login
-    else
-      log "Cloudflare already authenticated."
-    fi
-
-    # Create tunnel if it doesn't exist
-    if cloudflared tunnel list 2>/dev/null | grep -q "${TUNNEL_NAME}"; then
-      log "Tunnel '${TUNNEL_NAME}' already exists."
-    else
-      cloudflared tunnel create "${TUNNEL_NAME}"
-    fi
-
-    # Get tunnel ID
-    TUNNEL_ID="$(cloudflared tunnel list 2>/dev/null | awk -v name="${TUNNEL_NAME}" '$2==name {print $1; exit}')"
-    if [[ -z "${TUNNEL_ID}" ]]; then
-      warn "Could not determine tunnel ID. Skipping tunnel config."
-    else
-      TUNNEL_CREDS="${HOME}/.cloudflared/${TUNNEL_ID}.json"
-      TUNNEL_CONFIG="${HOME}/.cloudflared/config.yml"
-
-      log "Writing tunnel config to ${TUNNEL_CONFIG}..."
-      cat > "${TUNNEL_CONFIG}" <<TUNCONF
-tunnel: ${TUNNEL_ID}
-credentials-file: ${TUNNEL_CREDS}
-
-ingress:
-  - service: http://localhost:${PORT}
-TUNCONF
-
-      if [[ -n "${TUNNEL_HOSTNAME}" ]]; then
-        # Insert hostname rule before the catch-all
-        cat > "${TUNNEL_CONFIG}" <<TUNCONF
-tunnel: ${TUNNEL_ID}
-credentials-file: ${TUNNEL_CREDS}
-
-ingress:
-  - hostname: ${TUNNEL_HOSTNAME}
-    service: http://localhost:${PORT}
-  - service: http_status:404
-TUNCONF
-        log "Routing ${TUNNEL_HOSTNAME} -> localhost:${PORT}"
-        log "IMPORTANT: Add a CNAME record for ${TUNNEL_HOSTNAME} -> ${TUNNEL_ID}.cfargotunnel.com"
-      fi
-
-      # Install cloudflared as a systemd service
-      run_root cloudflared service install 2>/dev/null || true
-      run_root systemctl enable --now cloudflared 2>/dev/null || true
-      TUNNEL_CONFIGURED=1
-    fi
+    log "Installing Cloudflare Tunnel as a system service..."
+    # Remove any previous cloudflared service so we can re-install cleanly
+    run_root cloudflared service uninstall 2>/dev/null || true
+    run_root cloudflared service install "${TUNNEL_TOKEN}"
+    run_root systemctl enable --now cloudflared
+    TUNNEL_CONFIGURED=1
   fi
 fi
 
@@ -759,22 +717,14 @@ EOF
 
 if [[ "${TUNNEL_CONFIGURED}" -eq 1 ]]; then
   cat <<EOF
-Cloudflare Tunnel is configured:
-- Tunnel name: ${TUNNEL_NAME}
-- Config: ~/.cloudflared/config.yml
+Cloudflare Tunnel is running:
 - Service: sudo systemctl status cloudflared
+- Logs: sudo journalctl -u cloudflared -f
+- Configure the public hostname in the Zero Trust dashboard:
+  https://one.dash.cloudflare.com → Networks → Tunnels → configure
+  Add a public hostname pointing to http://localhost:${PORT}
+
 EOF
-  if [[ -n "${TUNNEL_HOSTNAME}" ]]; then
-    cat <<EOF
-- Public URL: https://${TUNNEL_HOSTNAME}
-- DNS: Add CNAME  ${TUNNEL_HOSTNAME} -> ${TUNNEL_ID}.cfargotunnel.com
-EOF
-  else
-    cat <<EOF
-- Quick tunnel (no custom domain). For a permanent URL, re-run with --tunnel-hostname.
-EOF
-  fi
-  printf '\n'
 fi
 
 if [[ "${GOOGLE_OAUTH_CONFIGURED}" -eq 1 ]]; then
