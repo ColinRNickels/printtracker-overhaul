@@ -1,16 +1,75 @@
-# Print Tracker (Makerspace Kiosk MVP)
+# Print Tracker (Makerspace Kiosk)
 
-A Flask kiosk service for tracking 3D prints in a shared makerspace:
+Print Tracker is a Flask app for a shared 3D-print makerspace workflow:
 
-- Patrons register prints at a kiosk before starting.
-- A label with a unique print ID and QR code is generated/printed.
-- Staff scan or enter the ID to mark prints `finished` or `failed`.
-- Completion/failure emails are sent to users.
-- Monthly reports and CSV exports summarize print activity.
+- Patron starts a print and creates a label at a kiosk.
+- Label includes a unique Print ID (`PT-YYYYMMDD-HHMMSS-##`) and QR code.
+- Staff scans QR/ID to mark `Finished` or `Failed`.
+- Patron can receive completion/failure email.
+- Monthly reports, charts, CSV export, and optional Google Sheets sync.
 
-The data model is intentionally flat to support easy CSV export and future migration to a Google Sheets backend.
+The data model is intentionally flat (spreadsheet-friendly) so you can move data between SQLite, CSV, and Google Sheets with minimal friction.
 
-## 1) Quick Local Start
+## 1) What’s Implemented
+
+### Kiosk
+
+- `/kiosk/register` form collects:
+  - first name
+  - last name
+  - NCSU email local part (`@ncsu.edu` appended)
+  - file name
+  - project type (`Personal`, `Academic`, `Research`)
+  - `Academic` adds required `Course #` + `Instructor`
+  - `Research` adds required `Department` + `PI`
+- Kiosk UI uses large-touch sizing for readability.
+- Submit button is labeled **Print Label**.
+- Success page says: **“Label is printing, please see staff if it doesn't print.”**
+- Success page auto-returns to kiosk start in 10 seconds.
+
+### Labels
+
+- Brother DK-1202 oriented landscape by default.
+- Human-readable layout prioritized:
+  - “PRINT IN PROGRESS”
+  - name as `Last, First`
+  - file name + project type + optional course/instructor/department/pi
+  - small QR at bottom-right (default `0.5in`).
+- Optional logo rendering from `LABEL_BRAND_LOGO_PATH`.
+- Label files can be saved for reprint, with daily retention cleanup.
+
+### Staff
+
+- `/staff` is password protected (`STAFF_PASSWORD`).
+- Staff dashboard includes:
+  - scan/open by QR or Print ID
+  - mark finished/failed
+  - failure notes required for failed jobs
+  - reprint buttons (in-progress + recent completed)
+  - runtime toggles for email, label save, retention days, QR payload mode
+- Staff login auto-returns to kiosk after 15s **except** when login was opened from QR completion links (`/staff/s/...` or `/staff/complete/...`).
+- Kiosk header hides Reports nav to reduce accidental navigation.
+
+### Notifications + Cloud
+
+- Email providers:
+  - SMTP (`EMAIL_PROVIDER=smtp`)
+  - Gmail API (`EMAIL_PROVIDER=gmail_api`)
+  - auto-fallback (`EMAIL_PROVIDER=auto`)
+- Google Sheets sync on register + completion when enabled.
+- OAuth helper script available (`scripts/google_oauth_bootstrap.py`).
+
+### Reports
+
+- `/reports/monthly` supports month picker and CSV export.
+- Charts included:
+  - prints per month trend (12 months)
+  - project type pie chart
+  - research department chart
+  - status pie chart
+- CSV includes flat fields for course/research details.
+
+## 2) Quick Local Start
 
 ```bash
 python3 -m venv .venv
@@ -27,23 +86,17 @@ Open:
 - Staff: `http://localhost:5000/staff/`
 - Reports: `http://localhost:5000/reports/monthly`
 
-Staff page password is `staffpw` by default (`STAFF_PASSWORD` in `.env`).
-
-If port `5000` is already in use:
+If port 5000 is busy:
 
 ```bash
 PORT=5050 python run.py
 ```
 
-## 2) Raspberry Pi Deployment (Beginner Friendly)
+## 3) Raspberry Pi Deploy (Fresh Image)
 
-If this is your first Linux setup, use the deployment script. It automates package install, Python setup, `.env`, database initialization, CUPS service enablement, and systemd service setup.
+### 3.1 One-time setup
 
-### 2.1) One-time setup (copy/paste)
-
-Use a fresh Raspberry Pi OS install (Desktop recommended), then open Terminal and run:
-
-Replace `<YOUR_REPO_URL>` in the command block first.
+Use Raspberry Pi OS Desktop.
 
 ```bash
 sudo apt update
@@ -58,97 +111,107 @@ chmod +x scripts/deploy_rpi.sh
 ./scripts/deploy_rpi.sh
 ```
 
-What the script asks for:
+### 3.2 What deploy script does
 
-1. Service user/group (usually keep defaults).
-2. Port (usually keep `5000`).
-3. Print mode (`cups` for real printer, `mock` for testing).
-4. CUPS queue name (example: `QL800`).
-5. CUPS media token (default: `DK-1202`).
+`scripts/deploy_rpi.sh` automates:
 
-The script also copies the bundled Makerspace logo to `assets/makerspace-logo.png` for label branding.
-Staff password defaults to `staffpw` unless you set `STAFF_PASSWORD` in `.env`.
-After first boot, change `STAFF_PASSWORD` to a real value and restart the service.
+- apt packages (`cups`, `printer-driver-ptouch`, `network-manager`, browser package, etc.)
+- virtualenv + dependencies
+- `.env` creation/update
+- DB init (`flask --app run.py init-db`)
+- systemd service (`print-tracker`)
+- optional AP setup (default ON)
+- optional Chromium kiosk autostart (default ON)
+- optional Google OAuth setup prompt (default ON)
 
-### 2.2) Brother QL-800 printer setup (manual part)
+Browser package is auto-detected (`chromium` first, then `chromium-browser`).
 
-The one thing you still do manually is add the printer queue in CUPS.
+### 3.3 Script prompts (interactive)
 
-1. Plug in the Brother QL-800 over USB.
-2. Open CUPS in a browser on the Pi: `http://localhost:631`.
-3. Go to `Administration` -> `Add Printer`.
-4. Select the QL-800 USB device.
-5. Choose the QL-800 driver/model (installed by `printer-driver-ptouch`).
-6. Set queue name (example: `QL800`).
+You will be asked for:
 
-Then verify in Terminal:
+1. service user/group
+2. port
+3. print mode (`cups` or `mock`)
+4. queue name
+5. CUPS media token
+6. AP options (`printerkiosk` defaults)
+7. Chromium kiosk autostart
+8. Google OAuth setup inputs
+
+### 3.4 Brother QL-800 setup (CUPS)
+
+Printer queue still needs manual CUPS add:
+
+1. Plug in QL-800 via USB.
+2. Open `http://localhost:631`.
+3. `Administration` -> `Add Printer`.
+4. Select Brother device and driver.
+5. Use queue name matching `.env` (default `QL800`).
+
+Verify:
 
 ```bash
 lpstat -e
 lpstat -p -d
-lpoptions -p <QUEUE_NAME> -l | grep -Ei 'media|PageSize'
-lp -d <QUEUE_NAME> /usr/share/cups/data/testprint
+lpoptions -p QL800 -l | grep -Ei 'media|PageSize'
+lp -d QL800 /usr/share/cups/data/testprint
 ```
 
-If you changed queue/media values after running the script, edit `.env` and restart:
+### 3.5 AP setup for staff phone/iPad scanning
+
+If AP setup is enabled (default):
+
+- SSID default: `printerkiosk`
+- Password default: `printerkiosk`
+- Pi AP IP: `192.168.4.1`
+
+Staff flow:
+
+1. Join Wi-Fi `printerkiosk`.
+2. Open `http://192.168.4.1:5000/staff/`.
+3. Log in once.
+4. Scan label QR from phone/tablet.
+
+When ready to hide SSID later:
 
 ```bash
-sudo systemctl restart print-tracker
+./scripts/deploy_rpi.sh --ap-hidden
 ```
 
-### 2.3) Confirm it works
+### 3.6 Kiosk browser autostart on reboot
 
-Open these pages from the Pi (or another device on the same network):
+When enabled (default), deploy creates autostart files so Chromium launches:
 
-- `http://<PI_HOSTNAME_OR_IP>:5000/kiosk/register`
-- `http://<PI_HOSTNAME_OR_IP>:5000/staff/`
-- `http://<PI_HOSTNAME_OR_IP>:5000/reports/monthly`
+- fullscreen kiosk mode
+- incognito
+- URL: `http://127.0.0.1:<PORT>/kiosk/register`
 
-Run one full workflow test:
+Requires desktop autologin (script attempts `raspi-config nonint do_boot_behaviour B4`).
 
-1. Create a print on kiosk page.
-2. Confirm a physical label prints.
-3. Scan QR on a staff device, sign in if prompted, then mark complete/failed.
-4. Confirm email behavior.
-5. Confirm record appears in monthly CSV.
-
-### 2.4) Re-run deployment script later
-
-Use this after updates or config changes:
+### 3.7 Deploy script examples
 
 ```bash
-cd /opt/print-tracker
-git pull
 ./scripts/deploy_rpi.sh --non-interactive
-```
-
-Useful script options:
-
-```bash
-./scripts/deploy_rpi.sh --help
-```
-
-Common examples:
-
-```bash
-./scripts/deploy_rpi.sh --non-interactive --printer-queue QL800 --media DK-1202
 ./scripts/deploy_rpi.sh --print-mode mock
+./scripts/deploy_rpi.sh --no-ap --no-kiosk-autostart
+./scripts/deploy_rpi.sh --ap-ssid printerkiosk --ap-password 'change-this-password'
+./scripts/deploy_rpi.sh --setup-google-oauth --google-client-secrets ~/Downloads/client_secret.json --google-gmail-sender makerspace@example.com --google-spreadsheet-id <SHEET_ID>
+./scripts/deploy_rpi.sh --no-google-oauth
 ```
 
-### 2.5) Google OAuth setup (Gmail + Google Sheets)
+## 4) Google OAuth (Gmail + Sheets)
 
-Use this when you want:
+The deploy script can run OAuth setup directly.
 
-- completion emails sent from a Google account via Gmail API.
-- every job upserted into a Google Sheet.
+If skipped, run manually:
 
 1. In Google Cloud Console:
-   - create/select a project.
-   - enable `Gmail API` and `Google Sheets API`.
-   - configure OAuth consent screen.
-   - create OAuth Client ID (`Desktop app`) and download JSON.
-2. Sign into the generic makerspace Google account in your browser.
-3. Run the helper script:
+   - create/select project
+   - enable **Gmail API** and **Google Sheets API**
+   - configure OAuth consent screen
+   - create OAuth Client ID (`Desktop app`) and download client JSON
+2. On Pi:
 
 ```bash
 cd /opt/print-tracker
@@ -158,100 +221,79 @@ python scripts/google_oauth_bootstrap.py \
   --gmail-sender makerspace@example.com
 ```
 
-4. Copy printed values into `/opt/print-tracker/.env`.
-5. Set your spreadsheet:
-   - create/open a Google Sheet.
-   - copy the spreadsheet ID from the URL.
-   - put it in `GOOGLE_SHEETS_SPREADSHEET_ID`.
-6. Restart service:
+3. Copy printed values into `.env`.
+4. Set `GOOGLE_SHEETS_SPREADSHEET_ID`.
+5. Set `GOOGLE_SHEETS_SYNC_ENABLED=true` once sheet ID is set.
+6. Restart:
 
 ```bash
 sudo systemctl restart print-tracker
 ```
 
-7. Submit one test job and confirm:
-   - job row appears in the configured worksheet.
-   - completion email is sent through the Google account.
+## 5) Key URLs
 
-### 2.6) Staff mobile scanning on Pi access-point network
+- `/kiosk/register`: kiosk print registration
+- `/staff/`: staff dashboard (password)
+- `/staff/s/<LABEL_CODE>`: QR-friendly staff shortcut
+- `/staff/complete/<LABEL_CODE>`: completion form
+- `/reports/monthly`: report + charts
+- `/reports/monthly.csv`: CSV export
 
-Yes, this works. If the Pi is an access point, staff iPads/phones can join that Wi-Fi and scan/update prints.
+## 6) Configuration Reference (`.env`)
 
-Required setup:
+Core:
 
-1. Configure AP SSID/password on Pi (staff-only credentials).
-2. Set `KIOSK_BASE_URL` to the Pi AP address (example `http://192.168.4.1:5000`).
-3. On staff page, set QR mode to `Open staff page link`.
-4. Staff logs into `/staff` once on the iPad browser, then scans labels.
+- `DATABASE_URL`
+- `STAFF_PASSWORD`
+- `DEFAULT_PRINTER_NAME`
 
-Security behavior:
+Label + printing:
 
-- QR links always route to staff endpoints.
-- Staff login is required before a print can be marked complete/failed.
-- Patrons can scan labels, but cannot update status unless they know the staff password.
-- Staff mobile users must authenticate at `/staff/login` before updates are allowed.
+- `LABEL_PRINT_MODE` (`mock`/`cups`)
+- `LABEL_PRINTER_QUEUE`
+- `LABEL_OUTPUT_DIR`
+- `LABEL_STOCK` (`DK1202`)
+- `LABEL_DPI` (`300`)
+- `LABEL_ORIENTATION` (`landscape`/`portrait`)
+- `LABEL_QR_PAYLOAD_MODE` (`url`/`id`)
+- `LABEL_QR_SIZE_INCH` (default `0.5`)
+- `LABEL_CUPS_MEDIA`
+- `LABEL_CUPS_EXTRA_OPTIONS`
+- `LABEL_SAVE_LABEL_FILES` (base default)
+- `LABEL_BRAND_TEXT`
+- `LABEL_BRAND_LOGO_PATH`
+- `KIOSK_BASE_URL` (important for mobile QR links)
 
-## 3) Kiosk / Touchscreen Notes
+Email:
 
-- The kiosk form is optimized for 7" touch displays.
-- Portrait mode layout targets Pi Display 2 (`720x1280`) and keeps a fixed shell to reduce keyboard-triggered reflow.
-- On short viewports (for example with on-screen keyboard open), layout reduces vertical waste.
-- Enable on-screen keyboard in Raspberry Pi OS accessibility settings for touch-only interaction.
-- Most USB QR scanners work as keyboard wedge devices and require no extra app-side configuration.
+- `EMAIL_PROVIDER` (`smtp`, `gmail_api`, `auto`)
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_USE_TLS`, `SMTP_FROM_ADDRESS`
 
-## 4) Core Workflow
+Google OAuth + Sheets:
 
-1. User fills in kiosk form:
-   - First name, last name, NCSU email local part, file name, project type.
-   - Academic: course number + instructor.
-   - Research: department + PI.
-2. App creates unique print ID (`PT-YYYYMMDD-HHMMSS-##`) with `in_progress` status.
-3. Label image is generated and sent to CUPS (or kept as file in mock mode).
-4. Staff scan ID/QR and mark finished or failed.
-5. Completion email template is sent.
-6. Reports and CSV summarize activity monthly.
+- `GOOGLE_OAUTH_CLIENT_ID`
+- `GOOGLE_OAUTH_CLIENT_SECRET`
+- `GOOGLE_OAUTH_REFRESH_TOKEN`
+- `GOOGLE_OAUTH_TOKEN_URI`
+- `GOOGLE_GMAIL_SENDER`
+- `GOOGLE_SHEETS_SYNC_ENABLED`
+- `GOOGLE_SHEETS_SPREADSHEET_ID`
+- `GOOGLE_SHEETS_WORKSHEET`
 
-## 5) Configuration Reference
+## 7) Staff Runtime Settings
 
-Important `.env` keys:
+Staff dashboard settings apply immediately and are stored in DB (`app_settings`):
 
-- `DATABASE_URL`: SQLite URL (absolute path recommended on Pi).
-- `STAFF_PASSWORD`: password for `/staff` access (default `staffpw`).
-- `LABEL_PRINT_MODE`: `mock` or `cups`.
-- `KIOSK_BASE_URL`: base URL encoded in QR links for staff mobile scans (example `http://192.168.4.1:5000`).
-- `LABEL_PRINTER_QUEUE`: CUPS queue name.
-- `LABEL_OUTPUT_DIR`: where generated label images are stored.
-- `LABEL_STOCK`: `DK1202` for Brother QL-800 DK-1202 labels.
-- `LABEL_DPI`: `300` recommended.
-- `LABEL_ORIENTATION`: `landscape` (default) or `portrait`.
-- `LABEL_QR_PAYLOAD_MODE`: `url` recommended for iPad/phone camera scanning, `id` for USB scanner workflows.
-- `LABEL_QR_SIZE_INCH`: QR size on label (default `0.5`).
-- `LABEL_CUPS_MEDIA`: CUPS media token (`DK-1202` or your driver's exact token).
-- `LABEL_CUPS_EXTRA_OPTIONS`: additional comma-separated CUPS options.
-- `LABEL_SAVE_LABEL_FILES`: base default (`true`). Staff can toggle this live on the staff page.
-- `LABEL_BRAND_TEXT`: fallback header text if no logo path.
-- `LABEL_BRAND_LOGO_PATH`: local logo file path (PNG recommended).
-- `DEFAULT_PRINTER_NAME`: stored printer descriptor.
-- `SMTP_*`: SMTP host/port/user/pass/TLS/from for completion emails.
-- `EMAIL_PROVIDER`: `smtp`, `gmail_api`, or `auto`.
-- `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` / `GOOGLE_OAUTH_REFRESH_TOKEN`: OAuth credentials used by Gmail and Sheets APIs.
-- `GOOGLE_OAUTH_TOKEN_URI`: token endpoint (default `https://oauth2.googleapis.com/token`).
-- `GOOGLE_GMAIL_SENDER`: optional `From:` override for Gmail API sends.
-- `GOOGLE_SHEETS_SYNC_ENABLED`: `true` to enable sync.
-- `GOOGLE_SHEETS_SPREADSHEET_ID`: target spreadsheet ID.
-- `GOOGLE_SHEETS_WORKSHEET`: worksheet tab name (default `PrintJobs`).
+- completion email enabled/disabled
+- save label files enabled/disabled
+- label retention days (1-30)
+- QR payload mode (`url` for camera scanning, `id` for USB scanner wedge)
 
-Staff page operational controls:
+With retention set to `1`, cleanup removes labels from yesterday and older.
 
-- completion email on/off
-- label image save on/off
-- label retention days (1-30; set to `1` to keep only today's labels)
-- QR mode switch (`link` for mobile camera, `ID` for scanner wedge)
-- reprint button for active and recently completed jobs
+## 8) Reports and Exports
 
-## 6) Reports and CSV Columns
-
-Monthly CSV export includes flat columns designed for spreadsheet workflows:
+Monthly CSV fields:
 
 - `PrintID`
 - `CreatedAt`
@@ -267,40 +309,55 @@ Monthly CSV export includes flat columns designed for spreadsheet workflows:
 - `PI`
 - `CompletedBy`
 
-## 7) Email Templates
+Google Sheets sync writes an expanded row (status labels, email fields, printer name, notes).
 
-Edit these files to match your makerspace messaging:
+## 9) Troubleshooting
 
-- `print_tracker/templates/email_success.txt`
-- `print_tracker/templates/email_failure.txt`
+### `chromium-browser has no installation candidate`
 
-## 8) Troubleshooting
+Deploy script now auto-detects package names. Pull latest code and rerun deploy.
 
-- `Port 5000 already in use`:
-  - Run with `PORT=5050` or stop conflicting service.
-- `sqlite3.OperationalError: unable to open database file`:
-  - Use absolute `DATABASE_URL` in `.env`.
-  - Ensure parent directory exists and service user can write to it.
-- Label preview 404 / missing PNG:
-  - If label saving is turned off in staff settings, preview PNGs are not stored by design.
-  - If you enable `LABEL_SAVE_LABEL_FILES=true`, ensure `LABEL_OUTPUT_DIR` is writable and consistent in `.env`.
-  - Restart service after changing `.env`.
-- Can't access `/staff`:
-  - Use the staff password from `.env` (`STAFF_PASSWORD`, default `staffpw`).
-- Logo not showing:
-  - Verify `LABEL_BRAND_LOGO_PATH` exists and is readable.
-  - Restart service after `.env` changes.
-- Service does not start:
-  - Check status: `sudo systemctl status print-tracker --no-pager`
-  - Check logs: `journalctl -u print-tracker -f`
-- Need to safely re-run setup:
-  - `cd /opt/print-tracker && ./scripts/deploy_rpi.sh --non-interactive`
-- iPad/phone scan opens unreachable URL:
-  - Set `KIOSK_BASE_URL` to a Pi-reachable address on your network (for AP mode, usually `http://192.168.4.1:5000`).
-  - In staff settings, use QR mode `Open staff page link`.
-- Google OAuth refresh token missing/expired:
-  - Re-run `python scripts/google_oauth_bootstrap.py --client-secrets ...`
-  - Update `.env` and restart service.
-- Google Sheet sync fails:
-  - Confirm `GOOGLE_SHEETS_SPREADSHEET_ID` is correct.
-  - Confirm the OAuth account has edit access to the spreadsheet.
+### `Text file busy` or weird `.venv/bin/python` errors
+
+Corrupted or in-use virtualenv. Script now validates venv and rebuilds automatically.
+
+Manual fix:
+
+```bash
+sudo systemctl stop print-tracker || true
+rm -rf .venv
+./scripts/deploy_rpi.sh
+```
+
+### `sqlite3.OperationalError: unable to open database file`
+
+- Use absolute `DATABASE_URL`.
+- Ensure service user can write to DB directory.
+
+### Label preview 404
+
+If label saving is disabled in staff settings, preview file is intentionally unavailable.
+
+### Mobile QR scan opens wrong/unreachable URL
+
+- Ensure `KIOSK_BASE_URL` is reachable from staff phone/tablet network.
+- Use QR mode `url` on staff settings.
+
+### First staff login after QR scan did not return correctly
+
+Fixed in current code by safer `next` URL handling + login timeout bypass for QR completion routes.
+
+### Google Sheets sync fails
+
+- Confirm spreadsheet ID and worksheet name.
+- Confirm OAuth account has edit access.
+- Check logs: `journalctl -u print-tracker -f`
+
+## 10) Useful Ops Commands
+
+```bash
+sudo systemctl status print-tracker --no-pager
+sudo systemctl restart print-tracker
+journalctl -u print-tracker -f
+```
+

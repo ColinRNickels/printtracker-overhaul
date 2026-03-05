@@ -11,12 +11,23 @@ PORT="5000"
 PRINT_MODE="cups"
 PRINTER_QUEUE="QL800"
 LABEL_MEDIA="DK-1202"
+SETUP_AP=1
+AP_SSID="printerkiosk"
+AP_PSK="printerkiosk"
+AP_HIDDEN=0
+AP_IP="192.168.4.1"
+KIOSK_AUTOSTART=1
 LOGO_SOURCE=""
 NON_INTERACTIVE=0
 SKIP_APT=0
 SKIP_SERVICE=0
 SKIP_CUPS=0
 SKIP_DB_INIT=0
+SETUP_GOOGLE_OAUTH=-1
+GOOGLE_CLIENT_SECRETS=""
+GOOGLE_GMAIL_SENDER=""
+GOOGLE_SPREADSHEET_ID=""
+GOOGLE_WORKSHEET="PrintJobs"
 
 usage() {
   cat <<'EOF'
@@ -33,6 +44,20 @@ Options:
   --print-mode MODE        "cups" or "mock" (default: cups).
   --printer-queue NAME     CUPS queue name (default: QL800).
   --media NAME             CUPS media token (default: DK-1202).
+  --ap-ssid SSID           Wi-Fi AP SSID for staff mobile scanning (default: printerkiosk).
+  --ap-password PASS       Wi-Fi AP passphrase (default: printerkiosk).
+  --ap-hidden              Hide AP SSID broadcast.
+  --no-ap                  Skip AP setup.
+  --no-kiosk-autostart     Skip Chromium kiosk autostart setup.
+  --setup-google-oauth     Run Google OAuth setup during deploy.
+  --no-google-oauth        Skip Google OAuth setup during deploy.
+  --google-client-secrets PATH
+                           Path to OAuth client JSON from Google Cloud.
+  --google-gmail-sender EMAIL
+                           Sender email for Gmail API (optional).
+  --google-spreadsheet-id ID
+                           Spreadsheet ID for Google Sheets sync (optional).
+  --google-worksheet NAME  Worksheet tab name (default: PrintJobs).
   --logo-source PATH       Optional local PNG path for label logo.
   --skip-apt               Skip apt package install/update.
   --skip-cups              Skip CUPS service setup and printer checks.
@@ -77,6 +102,40 @@ prompt_default() {
   else
     printf '%s' "${default}"
   fi
+}
+
+prompt_yes_no() {
+  local prompt="$1"
+  local default="${2:-y}"
+  local input=""
+  local hint="y/N"
+
+  if [[ "${default}" =~ ^([Yy]|[Yy]es)$ ]]; then
+    hint="Y/n"
+  fi
+
+  if [[ "${NON_INTERACTIVE}" -eq 1 ]]; then
+    [[ "${default}" =~ ^([Yy]|[Yy]es)$ ]]
+    return
+  fi
+
+  while true; do
+    read -r -p "${prompt} [${hint}]: " input
+    if [[ -z "${input}" ]]; then
+      input="${default}"
+    fi
+    case "${input}" in
+      y|Y|yes|YES)
+        return 0
+        ;;
+      n|N|no|NO)
+        return 1
+        ;;
+      *)
+        printf 'Please enter y or n.\n'
+        ;;
+    esac
+  done
 }
 
 set_env_value() {
@@ -134,6 +193,198 @@ for line in env_path.read_text().splitlines():
 PY
 }
 
+detect_wifi_interface() {
+  local iface=""
+  if command -v iw >/dev/null 2>&1; then
+    iface="$(iw dev 2>/dev/null | awk '$1=="Interface"{print $2; exit}')"
+  fi
+  if [[ -z "${iface}" ]]; then
+    iface="wlan0"
+  fi
+  printf '%s' "${iface}"
+}
+
+detect_chromium_package() {
+  local pkg=""
+  for pkg in chromium chromium-browser; do
+    if apt-cache show "${pkg}" >/dev/null 2>&1; then
+      printf '%s' "${pkg}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+run_google_oauth_setup() {
+  local env_file="$1"
+  local app_dir="$2"
+  local venv_python="$3"
+  local client_secrets="$4"
+  local sender="$5"
+  local spreadsheet_id="$6"
+  local worksheet="$7"
+
+  local output_file=""
+  output_file="$(mktemp)"
+
+  local -a oauth_cmd=(
+    "${venv_python}"
+    "${app_dir}/scripts/google_oauth_bootstrap.py"
+    --client-secrets "${client_secrets}"
+  )
+  if [[ -n "${sender}" ]]; then
+    oauth_cmd+=(--gmail-sender "${sender}")
+  fi
+
+  log "Starting Google OAuth flow (browser or console prompt)..."
+  (cd "${app_dir}" && "${oauth_cmd[@]}") | tee "${output_file}"
+
+  while IFS= read -r line; do
+    [[ "${line}" == *=* ]] || continue
+    local key="${line%%=*}"
+    local value="${line#*=}"
+    [[ "${key}" =~ ^[A-Z0-9_]+$ ]] || continue
+    [[ "${value}" == *"<your-spreadsheet-id>"* ]] && continue
+    set_env_value "${env_file}" "${key}" "${value}"
+  done < "${output_file}"
+  rm -f "${output_file}"
+
+  set_env_value "${env_file}" "EMAIL_PROVIDER" "gmail_api"
+  if [[ -n "${spreadsheet_id}" ]]; then
+    set_env_value "${env_file}" "GOOGLE_SHEETS_SPREADSHEET_ID" "${spreadsheet_id}"
+    set_env_value "${env_file}" "GOOGLE_SHEETS_SYNC_ENABLED" "true"
+  else
+    local existing_sheet_id=""
+    existing_sheet_id="$(get_env_value "${env_file}" "GOOGLE_SHEETS_SPREADSHEET_ID")"
+    if [[ -n "${existing_sheet_id}" ]]; then
+      set_env_value "${env_file}" "GOOGLE_SHEETS_SYNC_ENABLED" "true"
+    else
+      set_env_value "${env_file}" "GOOGLE_SHEETS_SYNC_ENABLED" "false"
+      warn "No Google Spreadsheet ID provided yet. Sheets sync remains disabled until GOOGLE_SHEETS_SPREADSHEET_ID is set."
+    fi
+  fi
+  if [[ -n "${worksheet}" ]]; then
+    set_env_value "${env_file}" "GOOGLE_SHEETS_WORKSHEET" "${worksheet}"
+  fi
+}
+
+setup_access_point() {
+  local iface="$1"
+  local hidden_flag="no"
+  if [[ "${AP_HIDDEN}" -eq 1 ]]; then
+    hidden_flag="yes"
+  fi
+
+  if ! command -v nmcli >/dev/null 2>&1; then
+    warn "nmcli not found. AP setup skipped."
+    return 1
+  fi
+
+  log "Configuring Wi-Fi access point '${AP_SSID}' on ${iface}..."
+  run_root systemctl enable --now NetworkManager || true
+  run_root nmcli radio wifi on || true
+
+  if run_root nmcli connection show print-tracker-ap >/dev/null 2>&1; then
+    run_root nmcli connection modify print-tracker-ap \
+      connection.autoconnect yes \
+      connection.interface-name "${iface}" \
+      802-11-wireless.mode ap \
+      802-11-wireless.band bg \
+      802-11-wireless.ssid "${AP_SSID}" \
+      802-11-wireless.hidden "${hidden_flag}" \
+      802-11-wireless-security.key-mgmt wpa-psk \
+      802-11-wireless-security.psk "${AP_PSK}" \
+      ipv4.method shared \
+      ipv4.addresses "${AP_IP}/24" \
+      ipv6.method ignore
+  else
+    run_root nmcli connection add type wifi ifname "${iface}" con-name print-tracker-ap autoconnect yes ssid "${AP_SSID}"
+    run_root nmcli connection modify print-tracker-ap \
+      connection.autoconnect yes \
+      connection.interface-name "${iface}" \
+      802-11-wireless.mode ap \
+      802-11-wireless.band bg \
+      802-11-wireless.ssid "${AP_SSID}" \
+      802-11-wireless.hidden "${hidden_flag}" \
+      802-11-wireless-security.key-mgmt wpa-psk \
+      802-11-wireless-security.psk "${AP_PSK}" \
+      ipv4.method shared \
+      ipv4.addresses "${AP_IP}/24" \
+      ipv6.method ignore
+  fi
+
+  run_root nmcli connection up print-tracker-ap || warn "Could not bring up print-tracker-ap immediately."
+  return 0
+}
+
+setup_kiosk_browser_autostart() {
+  local service_user="$1"
+  local kiosk_url="$2"
+  local service_home=""
+  service_home="$(getent passwd "${service_user}" | cut -d: -f6 || true)"
+  if [[ -z "${service_home}" ]]; then
+    warn "Could not resolve home directory for ${service_user}; kiosk browser autostart skipped."
+    return 1
+  fi
+
+  local launcher_dir="${service_home}/.local/bin"
+  local launcher_script="${launcher_dir}/print-tracker-kiosk-browser.sh"
+  local autostart_dir="${service_home}/.config/autostart"
+  local autostart_file="${autostart_dir}/print-tracker-kiosk.desktop"
+
+  run_root mkdir -p "${launcher_dir}" "${autostart_dir}"
+  run_root tee "${launcher_script}" >/dev/null <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+KIOSK_URL="\${1:-${kiosk_url}}"
+sleep 8
+
+BROWSER=""
+for candidate in chromium-browser chromium; do
+  if command -v "\${candidate}" >/dev/null 2>&1; then
+    BROWSER="\${candidate}"
+    break
+  fi
+done
+
+if [[ -z "\${BROWSER}" ]]; then
+  exit 1
+fi
+
+exec "\${BROWSER}" \
+  --incognito \
+  --kiosk \
+  --no-first-run \
+  --disable-restore-session-state \
+  --noerrdialogs \
+  --disable-infobars \
+  --disable-session-crashed-bubble \
+  --disable-features=TranslateUI \
+  --overscroll-history-navigation=0 \
+  "\${KIOSK_URL}"
+EOF
+  run_root chmod +x "${launcher_script}"
+
+  run_root tee "${autostart_file}" >/dev/null <<EOF
+[Desktop Entry]
+Type=Application
+Name=Print Tracker Kiosk
+Comment=Launch Print Tracker kiosk in Chromium
+Exec=${launcher_script} ${kiosk_url}
+X-GNOME-Autostart-enabled=true
+NoDisplay=false
+EOF
+
+  run_root chown -R "${service_user}:${SERVICE_GROUP}" "${service_home}/.local" "${service_home}/.config/autostart"
+
+  if command -v raspi-config >/dev/null 2>&1; then
+    run_root raspi-config nonint do_boot_behaviour B4 || warn "Could not set desktop autologin via raspi-config."
+  fi
+
+  return 0
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --non-interactive)
@@ -162,6 +413,50 @@ while [[ $# -gt 0 ]]; do
       ;;
     --media)
       LABEL_MEDIA="$2"
+      shift 2
+      ;;
+    --ap-ssid)
+      AP_SSID="$2"
+      shift 2
+      ;;
+    --ap-password)
+      AP_PSK="$2"
+      shift 2
+      ;;
+    --ap-hidden)
+      AP_HIDDEN=1
+      shift
+      ;;
+    --no-ap)
+      SETUP_AP=0
+      shift
+      ;;
+    --no-kiosk-autostart)
+      KIOSK_AUTOSTART=0
+      shift
+      ;;
+    --setup-google-oauth)
+      SETUP_GOOGLE_OAUTH=1
+      shift
+      ;;
+    --no-google-oauth)
+      SETUP_GOOGLE_OAUTH=0
+      shift
+      ;;
+    --google-client-secrets)
+      GOOGLE_CLIENT_SECRETS="$2"
+      shift 2
+      ;;
+    --google-gmail-sender)
+      GOOGLE_GMAIL_SENDER="$2"
+      shift 2
+      ;;
+    --google-spreadsheet-id)
+      GOOGLE_SPREADSHEET_ID="$2"
+      shift 2
+      ;;
+    --google-worksheet)
+      GOOGLE_WORKSHEET="$2"
       shift 2
       ;;
     --logo-source)
@@ -205,10 +500,65 @@ if [[ "${NON_INTERACTIVE}" -eq 0 ]]; then
   PRINT_MODE="$(prompt_default "Print mode (cups or mock)" "${PRINT_MODE}")"
   PRINTER_QUEUE="$(prompt_default "CUPS queue name" "${PRINTER_QUEUE}")"
   LABEL_MEDIA="$(prompt_default "CUPS media token" "${LABEL_MEDIA}")"
+  if prompt_yes_no "Set up a staff-only Wi-Fi access point for QR scanning" "y"; then
+    SETUP_AP=1
+    AP_SSID="$(prompt_default "AP SSID" "${AP_SSID}")"
+    AP_PSK="$(prompt_default "AP password (8+ characters)" "${AP_PSK}")"
+    if prompt_yes_no "Hide AP SSID broadcast now" "n"; then
+      AP_HIDDEN=1
+    else
+      AP_HIDDEN=0
+    fi
+  else
+    SETUP_AP=0
+  fi
+  if prompt_yes_no "Auto-launch Chromium in fullscreen kiosk mode on reboot" "y"; then
+    KIOSK_AUTOSTART=1
+  else
+    KIOSK_AUTOSTART=0
+  fi
+  if [[ "${SETUP_GOOGLE_OAUTH}" -lt 0 ]]; then
+    if prompt_yes_no "Configure Google OAuth now (Gmail + Sheets)" "y"; then
+      SETUP_GOOGLE_OAUTH=1
+      GOOGLE_CLIENT_SECRETS="$(prompt_default "Path to Google OAuth client JSON" "${HOME}/Downloads/client_secret.json")"
+      GOOGLE_GMAIL_SENDER="$(prompt_default "Gmail sender address (optional)" "${GOOGLE_GMAIL_SENDER}")"
+      GOOGLE_SPREADSHEET_ID="$(prompt_default "Google Spreadsheet ID (optional now)" "${GOOGLE_SPREADSHEET_ID}")"
+      GOOGLE_WORKSHEET="$(prompt_default "Google worksheet tab" "${GOOGLE_WORKSHEET}")"
+    else
+      SETUP_GOOGLE_OAUTH=0
+    fi
+  fi
 fi
 
 [[ "${PRINT_MODE}" == "cups" || "${PRINT_MODE}" == "mock" ]] || die "Print mode must be cups or mock."
 [[ "${PORT}" =~ ^[0-9]+$ ]] || die "Port must be a number."
+if [[ "${SETUP_AP}" -eq 1 ]]; then
+  [[ -n "${AP_SSID}" ]] || die "AP SSID cannot be empty."
+  (( ${#AP_PSK} >= 8 )) || die "AP password must be at least 8 characters."
+fi
+if [[ "${SETUP_GOOGLE_OAUTH}" -lt 0 ]]; then
+  SETUP_GOOGLE_OAUTH=0
+fi
+if [[ "${SETUP_GOOGLE_OAUTH}" -eq 1 ]]; then
+  [[ -n "${GOOGLE_CLIENT_SECRETS}" ]] || die "Google OAuth setup requested, but --google-client-secrets path is missing."
+  if [[ "${NON_INTERACTIVE}" -eq 0 ]]; then
+    while [[ ! -f "${GOOGLE_CLIENT_SECRETS}" ]]; do
+      warn "Google OAuth client secrets file not found: ${GOOGLE_CLIENT_SECRETS}"
+      if prompt_yes_no "Try a different client secrets path" "y"; then
+        GOOGLE_CLIENT_SECRETS="$(prompt_default "Path to Google OAuth client JSON" "${HOME}/Downloads/client_secret.json")"
+      else
+        SETUP_GOOGLE_OAUTH=0
+        warn "Google OAuth setup skipped by user."
+        break
+      fi
+    done
+  fi
+fi
+if [[ "${SETUP_GOOGLE_OAUTH}" -eq 1 ]]; then
+  if [[ ! -f "${GOOGLE_CLIENT_SECRETS}" ]]; then
+    die "Google OAuth client secrets file not found: ${GOOGLE_CLIENT_SECRETS}"
+  fi
+fi
 
 APP_DIR="${PROJECT_DIR}"
 INSTANCE_DIR="${APP_DIR}/instance"
@@ -234,7 +584,12 @@ HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 if [[ -z "${HOST_IP}" ]]; then
   HOST_IP="localhost"
 fi
-KIOSK_BASE_URL="http://${HOST_IP}:${PORT}"
+if [[ "${SETUP_AP}" -eq 1 ]]; then
+  KIOSK_BASE_URL="http://${AP_IP}:${PORT}"
+else
+  KIOSK_BASE_URL="http://${HOST_IP}:${PORT}"
+fi
+LOCAL_KIOSK_URL="http://127.0.0.1:${PORT}/kiosk/register"
 
 SECRET_KEY="$(python3 - <<'PY'
 import secrets
@@ -244,18 +599,30 @@ PY
 
 log "Project directory: ${APP_DIR}"
 log "Service user/group: ${SERVICE_USER}:${SERVICE_GROUP}"
-log "Kiosk URL base: ${KIOSK_BASE_URL}"
+log "Kiosk URL base (for QR links): ${KIOSK_BASE_URL}"
+log "Local kiosk launch URL (Chromium autostart): ${LOCAL_KIOSK_URL}"
 
 if [[ "${SKIP_APT}" -eq 0 ]]; then
   log "Installing system packages (this can take several minutes)..."
   run_root apt-get update
-  run_root apt-get install -y \
-    git \
-    python3-venv python3-pip python3-dev build-essential \
-    cups cups-client cups-bsd \
-    printer-driver-ptouch \
-    avahi-daemon \
+  APT_PACKAGES=(
+    git
+    python3-venv python3-pip python3-dev build-essential
+    cups cups-client cups-bsd
+    printer-driver-ptouch
+    network-manager
+    iw
+    avahi-daemon
     usbutils
+  )
+  CHROMIUM_PKG="$(detect_chromium_package || true)"
+  if [[ -n "${CHROMIUM_PKG}" ]]; then
+    log "Using browser package: ${CHROMIUM_PKG}"
+    APT_PACKAGES+=("${CHROMIUM_PKG}")
+  else
+    warn "No Chromium package candidate found (tried: chromium, chromium-browser). Install a Chromium browser package manually."
+  fi
+  run_root apt-get install -y "${APT_PACKAGES[@]}"
 else
   warn "Skipping apt package install (--skip-apt)."
 fi
@@ -268,9 +635,27 @@ else
 fi
 
 log "Preparing Python environment..."
-python3 -m venv "${VENV_DIR}"
-"${VENV_DIR}/bin/pip" install --upgrade pip
-"${VENV_DIR}/bin/pip" install -r "${APP_DIR}/requirements.txt" gunicorn
+VENV_OK=0
+if [[ -x "${VENV_DIR}/bin/python" ]]; then
+  if "${VENV_DIR}/bin/python" -c "import sys; print(sys.version_info[0])" >/dev/null 2>&1; then
+    VENV_OK=1
+    log "Reusing existing virtualenv at ${VENV_DIR}"
+  else
+    warn "Existing virtualenv is invalid/corrupted; rebuilding ${VENV_DIR}"
+  fi
+fi
+
+if [[ "${VENV_OK}" -eq 0 ]]; then
+  if [[ -d "${VENV_DIR}" ]]; then
+    if run_root systemctl list-unit-files | grep -q "^${SERVICE_NAME}\.service"; then
+      run_root systemctl stop "${SERVICE_NAME}" || true
+    fi
+    rm -rf "${VENV_DIR}"
+  fi
+  python3 -m venv "${VENV_DIR}"
+fi
+"${VENV_DIR}/bin/python" -m pip install --upgrade pip
+"${VENV_DIR}/bin/python" -m pip install -r "${APP_DIR}/requirements.txt" gunicorn
 
 log "Creating app directories..."
 mkdir -p "${INSTANCE_DIR}" "${LABEL_DIR}" "${ASSETS_DIR}"
@@ -317,6 +702,21 @@ if [[ -z "${EXISTING_STAFF_PASSWORD}" ]]; then
   set_env_value "${ENV_FILE}" "STAFF_PASSWORD" "staffpw"
 fi
 
+GOOGLE_OAUTH_CONFIGURED=0
+if [[ "${SETUP_GOOGLE_OAUTH}" -eq 1 ]]; then
+  run_google_oauth_setup \
+    "${ENV_FILE}" \
+    "${APP_DIR}" \
+    "${VENV_DIR}/bin/python" \
+    "${GOOGLE_CLIENT_SECRETS}" \
+    "${GOOGLE_GMAIL_SENDER}" \
+    "${GOOGLE_SPREADSHEET_ID}" \
+    "${GOOGLE_WORKSHEET}"
+  GOOGLE_OAUTH_CONFIGURED=1
+else
+  warn "Skipping Google OAuth setup. You can run later with: source .venv/bin/activate && python scripts/google_oauth_bootstrap.py --client-secrets /path/to/client_secret.json"
+fi
+
 if [[ "${SKIP_DB_INIT}" -eq 0 ]]; then
   log "Initializing database..."
   (cd "${APP_DIR}" && "${VENV_DIR}/bin/flask" --app run.py init-db)
@@ -340,6 +740,19 @@ if [[ "${SKIP_CUPS}" -eq 0 ]]; then
   fi
 else
   warn "Skipping CUPS setup (--skip-cups)."
+fi
+
+AP_CONFIGURED=0
+WIFI_IFACE=""
+if [[ "${SETUP_AP}" -eq 1 ]]; then
+  WIFI_IFACE="$(detect_wifi_interface)"
+  if setup_access_point "${WIFI_IFACE}"; then
+    AP_CONFIGURED=1
+  else
+    warn "AP setup failed. You can rerun script after fixing NetworkManager."
+  fi
+else
+  warn "Skipping AP setup (--no-ap)."
 fi
 
 if [[ "${SKIP_SERVICE}" -eq 0 ]]; then
@@ -368,6 +781,17 @@ else
   warn "Skipping systemd setup (--skip-service)."
 fi
 
+KIOSK_AUTOSTART_CONFIGURED=0
+if [[ "${KIOSK_AUTOSTART}" -eq 1 ]]; then
+  if setup_kiosk_browser_autostart "${SERVICE_USER}" "${LOCAL_KIOSK_URL}"; then
+    KIOSK_AUTOSTART_CONFIGURED=1
+  else
+    warn "Chromium kiosk autostart setup failed."
+  fi
+else
+  warn "Skipping Chromium kiosk autostart (--no-kiosk-autostart)."
+fi
+
 log "Verifying service status..."
 if [[ "${SKIP_SERVICE}" -eq 0 ]]; then
   run_root systemctl --no-pager --full status "${SERVICE_NAME}" || true
@@ -383,7 +807,7 @@ cat <<EOF
 Deployment complete.
 
 Next checks:
-1) Open http://${HOST_IP}:${PORT}/kiosk/register
+1) On the Pi, open http://127.0.0.1:${PORT}/kiosk/register
 2) In CUPS, confirm queue "${PRINTER_QUEUE}" exists: http://localhost:631
 3) Print a CUPS test page:
    lp -d ${PRINTER_QUEUE} /usr/share/cups/data/testprint
@@ -395,6 +819,54 @@ Useful commands:
 
 Important post-deploy checks:
 - Change STAFF_PASSWORD in ${ENV_FILE} from default "staffpw", then restart the service.
-- If staff scan from iPad/phone on Pi AP mode, set KIOSK_BASE_URL in ${ENV_FILE} to the Pi AP address (example: http://192.168.4.1:${PORT}), then restart the service.
+- Confirm KIOSK_BASE_URL in ${ENV_FILE} is reachable from staff devices for QR scans.
 
 EOF
+
+if [[ "${AP_CONFIGURED}" -eq 1 ]]; then
+  cat <<EOF
+Staff access-point network is ready:
+- SSID: ${AP_SSID}
+- Password: ${AP_PSK}
+- Broadcast: $( [[ "${AP_HIDDEN}" -eq 1 ]] && printf 'hidden' || printf 'visible' )
+- Pi AP IP: ${AP_IP}
+- Staff URL after joining Wi-Fi: http://${AP_IP}:${PORT}/staff/
+
+How staff should connect:
+1) On iPad/iPhone, open Wi-Fi settings.
+2) Join "${AP_SSID}" using the password above.
+3) Open Safari and visit http://${AP_IP}:${PORT}/staff/
+4) Log in once with staff password, then scan label QR codes.
+
+EOF
+fi
+
+if [[ "${KIOSK_AUTOSTART_CONFIGURED}" -eq 1 ]]; then
+  cat <<EOF
+Browser kiosk autostart is enabled:
+- On reboot + desktop auto-login, Chromium launches fullscreen incognito to:
+  ${LOCAL_KIOSK_URL}
+
+EOF
+fi
+
+if [[ "${GOOGLE_OAUTH_CONFIGURED}" -eq 1 ]]; then
+  cat <<EOF
+Google OAuth is configured in ${ENV_FILE}.
+- Gmail API sender is enabled through EMAIL_PROVIDER=gmail_api.
+- Google Sheets sync is enabled when a spreadsheet ID is set.
+
+EOF
+else
+  cat <<EOF
+Google OAuth setup was skipped.
+To configure Gmail + Google Sheets later:
+1) Create OAuth Desktop App credentials in Google Cloud Console.
+2) Run:
+   source .venv/bin/activate
+   python scripts/google_oauth_bootstrap.py --client-secrets /path/to/client_secret.json
+3) Copy values into ${ENV_FILE}, set GOOGLE_SHEETS_SPREADSHEET_ID, then:
+   sudo systemctl restart ${SERVICE_NAME}
+
+EOF
+fi

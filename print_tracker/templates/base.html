@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
 <body class="{% if request.endpoint %}route-{{ request.endpoint|replace('.', '-') }}{% endif %}">
+    {% set on_kiosk_route = request.endpoint and request.endpoint.startswith('kiosk.') %}
     <header class="site-header">
         <a class="brand" href="{{ url_for('kiosk.register') }}" aria-label="NC State University Libraries Makerspace Print Tracker">
             <img src="{{ url_for('static', filename='ncsu-makerspace-logo-long-v2.png') }}" alt="NC State University Libraries Makerspace logo">
@@ -14,7 +15,9 @@
         <nav>
             <a href="{{ url_for('kiosk.register') }}">Kiosk</a>
             <a href="{{ url_for('staff.dashboard') }}">Staff</a>
-            <a href="{{ url_for('reports.monthly') }}">Reports</a>
+            {% if not on_kiosk_route %}
+                <a href="{{ url_for('reports.monthly') }}">Reports</a>
+            {% endif %}
         </nav>
     </header>
 

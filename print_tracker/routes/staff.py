@@ -49,30 +49,57 @@ def _is_safe_next_url(value: str) -> bool:
     return value.startswith("/")
 
 
+def _sanitize_next_url(value: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+
+    if raw.startswith("/"):
+        return raw
+
+    parsed = urlparse(raw)
+    if parsed.scheme in {"http", "https"} and parsed.netloc and parsed.netloc == request.host:
+        path = parsed.path or "/"
+        if parsed.query:
+            path = f"{path}?{parsed.query}"
+        return path if path.startswith("/") else f"/{path}"
+
+    return ""
+
+
 @bp.before_request
 def require_staff_password():
     if request.endpoint in {"staff.login"}:
         return None
     if session.get(STAFF_SESSION_KEY):
         return None
-    return redirect(url_for("staff.login", next=request.full_path if request.query_string else request.path))
+    next_target = request.full_path.rstrip("?")
+    return redirect(url_for("staff.login", next=next_target))
 
 
 @bp.route("/login", methods=["GET", "POST"])
 def login():
-    next_url = request.args.get("next", "")
+    next_url = _sanitize_next_url(request.args.get("next", ""))
     if request.method == "POST":
         password = request.form.get("password", "")
         if password == current_app.config["STAFF_PASSWORD"]:
             session[STAFF_SESSION_KEY] = True
-            destination = request.form.get("next", "")
+            destination = _sanitize_next_url(request.form.get("next", ""))
             if not _is_safe_next_url(destination):
                 destination = url_for("staff.dashboard")
             flash("Staff access granted.", "success")
             return redirect(destination)
         flash("Incorrect staff password.", "error")
-        next_url = request.form.get("next", next_url)
-    return render_template("staff_login.html", next_url=next_url if _is_safe_next_url(next_url) else "")
+        next_url = _sanitize_next_url(request.form.get("next", next_url))
+
+    auto_return_to_kiosk = not (
+        next_url.startswith("/staff/s/") or next_url.startswith("/staff/complete/")
+    )
+    return render_template(
+        "staff_login.html",
+        next_url=next_url if _is_safe_next_url(next_url) else "",
+        auto_return_to_kiosk=auto_return_to_kiosk,
+    )
 
 
 @bp.route("/logout", methods=["POST"])
