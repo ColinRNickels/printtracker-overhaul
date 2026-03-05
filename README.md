@@ -236,14 +236,11 @@ every restart — fine for a demo, not for production.
 #### Install cloudflared on the Pi
 
 ```bash
-curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
-  | sudo tee /usr/share/keyrings/cloudflare-archive-keyring.gpg >/dev/null
-
-echo "deb [signed-by=/usr/share/keyrings/cloudflare-archive-keyring.gpg] \
-  https://pkg.cloudflare.com/cloudflared $(lsb_release -cs) main" \
-  | sudo tee /etc/apt/sources.list.d/cloudflared.list
-
-sudo apt update && sudo apt install -y cloudflared
+# Download the latest cloudflared .deb for arm64 (Raspberry Pi)
+curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.deb \
+  -o /tmp/cloudflared.deb
+sudo dpkg -i /tmp/cloudflared.deb
+rm /tmp/cloudflared.deb
 ```
 
 #### Authenticate

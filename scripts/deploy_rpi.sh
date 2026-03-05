@@ -11,12 +11,6 @@ PORT="5000"
 PRINT_MODE="cups"
 PRINTER_QUEUE="QL800"
 LABEL_MEDIA="DK-1202"
-SETUP_AP=1
-AP_SSID="printerkiosk"
-AP_PSK="printerkiosk"
-AP_HIDDEN=0
-AP_IP="192.168.4.1"
-KIOSK_AUTOSTART=1
 STAFF_PASSWORD=""
 LOGO_SOURCE=""
 NON_INTERACTIVE=0
@@ -45,11 +39,6 @@ Options:
   --print-mode MODE        "cups" or "mock" (default: cups).
   --printer-queue NAME     CUPS queue name (default: QL800).
   --media NAME             CUPS media token (default: DK-1202).
-  --ap-ssid SSID           Wi-Fi AP SSID for staff mobile scanning (default: printerkiosk).
-  --ap-password PASS       Wi-Fi AP passphrase (default: printerkiosk).
-  --ap-hidden              Hide AP SSID broadcast.
-  --no-ap                  Skip AP setup.
-  --no-kiosk-autostart     Skip Chromium kiosk autostart setup.
   --staff-password PASS     Staff dashboard password (required).
   --setup-google-oauth     Run Google OAuth setup during deploy.
   --no-google-oauth        Skip Google OAuth setup during deploy.
@@ -195,27 +184,7 @@ for line in env_path.read_text().splitlines():
 PY
 }
 
-detect_wifi_interface() {
-  local iface=""
-  if command -v iw >/dev/null 2>&1; then
-    iface="$(iw dev 2>/dev/null | awk '$1=="Interface"{print $2; exit}')"
-  fi
-  if [[ -z "${iface}" ]]; then
-    iface="wlan0"
-  fi
-  printf '%s' "${iface}"
-}
 
-detect_chromium_package() {
-  local pkg=""
-  for pkg in chromium chromium-browser; do
-    if apt-cache show "${pkg}" >/dev/null 2>&1; then
-      printf '%s' "${pkg}"
-      return 0
-    fi
-  done
-  return 1
-}
 
 run_google_oauth_setup() {
   local env_file="$1"
@@ -270,123 +239,6 @@ run_google_oauth_setup() {
   fi
 }
 
-setup_access_point() {
-  local iface="$1"
-  local hidden_flag="no"
-  if [[ "${AP_HIDDEN}" -eq 1 ]]; then
-    hidden_flag="yes"
-  fi
-
-  if ! command -v nmcli >/dev/null 2>&1; then
-    warn "nmcli not found. AP setup skipped."
-    return 1
-  fi
-
-  log "Configuring Wi-Fi access point '${AP_SSID}' on ${iface}..."
-  run_root systemctl enable --now NetworkManager || true
-  run_root nmcli radio wifi on || true
-
-  if run_root nmcli connection show print-tracker-ap >/dev/null 2>&1; then
-    run_root nmcli connection modify print-tracker-ap \
-      connection.autoconnect yes \
-      connection.interface-name "${iface}" \
-      802-11-wireless.mode ap \
-      802-11-wireless.band bg \
-      802-11-wireless.ssid "${AP_SSID}" \
-      802-11-wireless.hidden "${hidden_flag}" \
-      802-11-wireless-security.key-mgmt wpa-psk \
-      802-11-wireless-security.psk "${AP_PSK}" \
-      ipv4.method shared \
-      ipv4.addresses "${AP_IP}/24" \
-      ipv6.method ignore
-  else
-    run_root nmcli connection add type wifi ifname "${iface}" con-name print-tracker-ap autoconnect yes ssid "${AP_SSID}"
-    run_root nmcli connection modify print-tracker-ap \
-      connection.autoconnect yes \
-      connection.interface-name "${iface}" \
-      802-11-wireless.mode ap \
-      802-11-wireless.band bg \
-      802-11-wireless.ssid "${AP_SSID}" \
-      802-11-wireless.hidden "${hidden_flag}" \
-      802-11-wireless-security.key-mgmt wpa-psk \
-      802-11-wireless-security.psk "${AP_PSK}" \
-      ipv4.method shared \
-      ipv4.addresses "${AP_IP}/24" \
-      ipv6.method ignore
-  fi
-
-  run_root nmcli connection up print-tracker-ap || warn "Could not bring up print-tracker-ap immediately."
-  return 0
-}
-
-setup_kiosk_browser_autostart() {
-  local service_user="$1"
-  local kiosk_url="$2"
-  local service_home=""
-  service_home="$(getent passwd "${service_user}" | cut -d: -f6 || true)"
-  if [[ -z "${service_home}" ]]; then
-    warn "Could not resolve home directory for ${service_user}; kiosk browser autostart skipped."
-    return 1
-  fi
-
-  local launcher_dir="${service_home}/.local/bin"
-  local launcher_script="${launcher_dir}/print-tracker-kiosk-browser.sh"
-  local autostart_dir="${service_home}/.config/autostart"
-  local autostart_file="${autostart_dir}/print-tracker-kiosk.desktop"
-
-  run_root mkdir -p "${launcher_dir}" "${autostart_dir}"
-  run_root tee "${launcher_script}" >/dev/null <<EOF
-#!/usr/bin/env bash
-set -Eeuo pipefail
-
-KIOSK_URL="\${1:-${kiosk_url}}"
-sleep 8
-
-BROWSER=""
-for candidate in chromium-browser chromium; do
-  if command -v "\${candidate}" >/dev/null 2>&1; then
-    BROWSER="\${candidate}"
-    break
-  fi
-done
-
-if [[ -z "\${BROWSER}" ]]; then
-  exit 1
-fi
-
-exec "\${BROWSER}" \
-  --incognito \
-  --kiosk \
-  --no-first-run \
-  --disable-restore-session-state \
-  --noerrdialogs \
-  --disable-infobars \
-  --disable-session-crashed-bubble \
-  --disable-features=TranslateUI \
-  --overscroll-history-navigation=0 \
-  "\${KIOSK_URL}"
-EOF
-  run_root chmod +x "${launcher_script}"
-
-  run_root tee "${autostart_file}" >/dev/null <<EOF
-[Desktop Entry]
-Type=Application
-Name=Print Tracker Kiosk
-Comment=Launch Print Tracker kiosk in Chromium
-Exec=${launcher_script} ${kiosk_url}
-X-GNOME-Autostart-enabled=true
-NoDisplay=false
-EOF
-
-  run_root chown -R "${service_user}:${SERVICE_GROUP}" "${service_home}/.local" "${service_home}/.config/autostart"
-
-  if command -v raspi-config >/dev/null 2>&1; then
-    run_root raspi-config nonint do_boot_behaviour B4 || warn "Could not set desktop autologin via raspi-config."
-  fi
-
-  return 0
-}
-
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --non-interactive)
@@ -416,26 +268,6 @@ while [[ $# -gt 0 ]]; do
     --media)
       LABEL_MEDIA="$2"
       shift 2
-      ;;
-    --ap-ssid)
-      AP_SSID="$2"
-      shift 2
-      ;;
-    --ap-password)
-      AP_PSK="$2"
-      shift 2
-      ;;
-    --ap-hidden)
-      AP_HIDDEN=1
-      shift
-      ;;
-    --no-ap)
-      SETUP_AP=0
-      shift
-      ;;
-    --no-kiosk-autostart)
-      KIOSK_AUTOSTART=0
-      shift
       ;;
     --staff-password)
       STAFF_PASSWORD="$2"
@@ -524,23 +356,6 @@ if [[ "${NON_INTERACTIVE}" -eq 0 ]]; then
   PRINT_MODE="$(prompt_default "Print mode (cups or mock)" "${PRINT_MODE}")"
   PRINTER_QUEUE="$(prompt_default "CUPS queue name" "${PRINTER_QUEUE}")"
   LABEL_MEDIA="$(prompt_default "CUPS media token" "${LABEL_MEDIA}")"
-  if prompt_yes_no "Set up a staff-only Wi-Fi access point for QR scanning" "y"; then
-    SETUP_AP=1
-    AP_SSID="$(prompt_default "AP SSID" "${AP_SSID}")"
-    AP_PSK="$(prompt_default "AP password (8+ characters)" "${AP_PSK}")"
-    if prompt_yes_no "Hide AP SSID broadcast now" "n"; then
-      AP_HIDDEN=1
-    else
-      AP_HIDDEN=0
-    fi
-  else
-    SETUP_AP=0
-  fi
-  if prompt_yes_no "Auto-launch Chromium in fullscreen kiosk mode on reboot" "y"; then
-    KIOSK_AUTOSTART=1
-  else
-    KIOSK_AUTOSTART=0
-  fi
   if [[ "${SETUP_GOOGLE_OAUTH}" -lt 0 ]]; then
     if prompt_yes_no "Configure Google OAuth now (Gmail + Sheets)" "y"; then
       SETUP_GOOGLE_OAUTH=1
@@ -557,10 +372,6 @@ fi
 [[ "${PRINT_MODE}" == "cups" || "${PRINT_MODE}" == "mock" ]] || die "Print mode must be cups or mock."
 [[ "${PORT}" =~ ^[0-9]+$ ]] || die "Port must be a number."
 [[ -n "${STAFF_PASSWORD}" ]] || die "Staff password is required. Use --staff-password or run in interactive mode."
-if [[ "${SETUP_AP}" -eq 1 ]]; then
-  [[ -n "${AP_SSID}" ]] || die "AP SSID cannot be empty."
-  (( ${#AP_PSK} >= 8 )) || die "AP password must be at least 8 characters."
-fi
 if [[ "${SETUP_GOOGLE_OAUTH}" -lt 0 ]]; then
   SETUP_GOOGLE_OAUTH=0
 fi
@@ -609,12 +420,7 @@ HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 if [[ -z "${HOST_IP}" ]]; then
   HOST_IP="localhost"
 fi
-if [[ "${SETUP_AP}" -eq 1 ]]; then
-  KIOSK_BASE_URL="http://${AP_IP}:${PORT}"
-else
-  KIOSK_BASE_URL="http://${HOST_IP}:${PORT}"
-fi
-LOCAL_KIOSK_URL="http://127.0.0.1:${PORT}/kiosk/register"
+KIOSK_BASE_URL="http://${HOST_IP}:${PORT}"
 
 SECRET_KEY="$(python3 - <<'PY'
 import secrets
@@ -625,7 +431,6 @@ PY
 log "Project directory: ${APP_DIR}"
 log "Service user/group: ${SERVICE_USER}:${SERVICE_GROUP}"
 log "Kiosk URL base (for QR links): ${KIOSK_BASE_URL}"
-log "Local kiosk launch URL (Chromium autostart): ${LOCAL_KIOSK_URL}"
 
 if [[ "${SKIP_APT}" -eq 0 ]]; then
   log "Installing system packages (this can take several minutes)..."
@@ -635,19 +440,26 @@ if [[ "${SKIP_APT}" -eq 0 ]]; then
     python3-venv python3-pip python3-dev build-essential
     cups cups-client cups-bsd
     printer-driver-ptouch
-    network-manager
-    iw
     avahi-daemon
     usbutils
   )
-  CHROMIUM_PKG="$(detect_chromium_package || true)"
-  if [[ -n "${CHROMIUM_PKG}" ]]; then
-    log "Using browser package: ${CHROMIUM_PKG}"
-    APT_PACKAGES+=("${CHROMIUM_PKG}")
-  else
-    warn "No Chromium package candidate found (tried: chromium, chromium-browser). Install a Chromium browser package manually."
-  fi
   run_root apt-get install -y "${APT_PACKAGES[@]}"
+
+  if ! command -v cloudflared >/dev/null 2>&1; then
+    log "Installing cloudflared..."
+    local cfd_deb="/tmp/cloudflared.deb"
+    local cfd_arch="amd64"
+    case "$(dpkg --print-architecture)" in
+      arm64|aarch64) cfd_arch="arm64" ;;
+      armhf|armv7l)  cfd_arch="arm"   ;;
+    esac
+    curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${cfd_arch}.deb" \
+      -o "${cfd_deb}"
+    run_root dpkg -i "${cfd_deb}"
+    rm -f "${cfd_deb}"
+  else
+    log "cloudflared already installed: $(cloudflared --version)"
+  fi
 else
   warn "Skipping apt package install (--skip-apt)."
 fi
@@ -764,19 +576,6 @@ else
   warn "Skipping CUPS setup (--skip-cups)."
 fi
 
-AP_CONFIGURED=0
-WIFI_IFACE=""
-if [[ "${SETUP_AP}" -eq 1 ]]; then
-  WIFI_IFACE="$(detect_wifi_interface)"
-  if setup_access_point "${WIFI_IFACE}"; then
-    AP_CONFIGURED=1
-  else
-    warn "AP setup failed. You can rerun script after fixing NetworkManager."
-  fi
-else
-  warn "Skipping AP setup (--no-ap)."
-fi
-
 if [[ "${SKIP_SERVICE}" -eq 0 ]]; then
   log "Writing systemd service..."
   run_root tee "/etc/systemd/system/${SERVICE_NAME}.service" >/dev/null <<EOF
@@ -801,17 +600,6 @@ EOF
   run_root systemctl enable --now "${SERVICE_NAME}"
 else
   warn "Skipping systemd setup (--skip-service)."
-fi
-
-KIOSK_AUTOSTART_CONFIGURED=0
-if [[ "${KIOSK_AUTOSTART}" -eq 1 ]]; then
-  if setup_kiosk_browser_autostart "${SERVICE_USER}" "${LOCAL_KIOSK_URL}"; then
-    KIOSK_AUTOSTART_CONFIGURED=1
-  else
-    warn "Chromium kiosk autostart setup failed."
-  fi
-else
-  warn "Skipping Chromium kiosk autostart (--no-kiosk-autostart)."
 fi
 
 log "Verifying service status..."
@@ -843,33 +631,6 @@ Important post-deploy checks:
 - Confirm KIOSK_BASE_URL in ${ENV_FILE} is reachable from staff devices for QR scans.
 
 EOF
-
-if [[ "${AP_CONFIGURED}" -eq 1 ]]; then
-  cat <<EOF
-Staff access-point network is ready:
-- SSID: ${AP_SSID}
-- Password: ${AP_PSK}
-- Broadcast: $( [[ "${AP_HIDDEN}" -eq 1 ]] && printf 'hidden' || printf 'visible' )
-- Pi AP IP: ${AP_IP}
-- Staff URL after joining Wi-Fi: http://${AP_IP}:${PORT}/staff/
-
-How staff should connect:
-1) On iPad/iPhone, open Wi-Fi settings.
-2) Join "${AP_SSID}" using the password above.
-3) Open Safari and visit http://${AP_IP}:${PORT}/staff/
-4) Log in once with staff password, then scan label QR codes.
-
-EOF
-fi
-
-if [[ "${KIOSK_AUTOSTART_CONFIGURED}" -eq 1 ]]; then
-  cat <<EOF
-Browser kiosk autostart is enabled:
-- On reboot + desktop auto-login, Chromium launches fullscreen incognito to:
-  ${LOCAL_KIOSK_URL}
-
-EOF
-fi
 
 if [[ "${GOOGLE_OAUTH_CONFIGURED}" -eq 1 ]]; then
   cat <<EOF

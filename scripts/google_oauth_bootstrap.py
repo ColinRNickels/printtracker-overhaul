@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from urllib.parse import urlparse, parse_qs
 
 
 DEFAULT_SCOPES = [
@@ -16,7 +17,9 @@ def _load_client_info(client_secrets_path: Path) -> tuple[str, str]:
     data = json.loads(client_secrets_path.read_text())
     payload = data.get("installed") or data.get("web")
     if not payload:
-        raise ValueError("Client secrets JSON must contain an 'installed' or 'web' section.")
+        raise ValueError(
+            "Client secrets JSON must contain an 'installed' or 'web' section."
+        )
     client_id = payload.get("client_id", "").strip()
     client_secret = payload.get("client_secret", "").strip()
     if not client_id or not client_secret:
@@ -32,12 +35,41 @@ def _run_flow(client_secrets_path: Path, scopes: list[str]):
             "google-auth-oauthlib is not installed. Run `pip install -r requirements.txt`."
         ) from exc
 
-    flow = InstalledAppFlow.from_client_secrets_file(str(client_secrets_path), scopes=scopes)
-    try:
-        return flow.run_local_server(port=0, access_type="offline", prompt="consent")
-    except Exception:
-        # Useful on headless systems where local callback cannot be opened.
-        return flow.run_console(access_type="offline", prompt="consent")
+    # Manual copy-paste flow using a localhost redirect.
+    # Google redirects to http://localhost/?code=…  which won't load
+    # (no server), but the user copies the full URL from the address bar.
+    flow = InstalledAppFlow.from_client_secrets_file(
+        str(client_secrets_path),
+        scopes=scopes,
+        redirect_uri="http://localhost",
+    )
+
+    auth_url, _ = flow.authorization_url(
+        access_type="offline",
+        prompt="consent",
+    )
+
+    print("\n1. Open this URL in a browser (any machine):\n")
+    print(f"   {auth_url}\n")
+    print("2. Sign in and grant access.")
+    print("   You will be redirected to a page that won't load — that's expected.\n")
+    print("3. Copy the FULL URL from your browser's address bar.")
+    print("   It will look like:  http://localhost/?code=4/0A...&scope=...\n")
+    redirect_url = input("4. Paste the full redirect URL here: ").strip()
+    if not redirect_url:
+        raise RuntimeError("No URL provided.")
+
+    # Extract the authorisation code from the pasted URL.
+    parsed = urlparse(redirect_url)
+    code_values = parse_qs(parsed.query).get("code")
+    if not code_values:
+        raise RuntimeError(
+            "Could not find an authorisation code in the URL. "
+            "Make sure you copied the entire address bar contents."
+        )
+
+    flow.fetch_token(code=code_values[0])
+    return flow.credentials
 
 
 def main() -> int:
