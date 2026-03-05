@@ -136,7 +136,8 @@ if [[ -n "${GO_NCSU_API_TOKEN}" && -n "${GO_NCSU_LINK_SLUG}" ]]; then
   GO_API_URL="https://go.ncsu.edu/api/v2/links/${GO_NCSU_LINK_SLUG}"
   log "Updating go.ncsu.edu link (${GO_NCSU_LINK_SLUG}) → ${TUNNEL_URL} ..."
 
-  HTTP_CODE="$(curl --silent --output /dev/stderr --write-out '%{http_code}' \
+  RESPONSE_FILE="$(mktemp /tmp/golink-resp-XXXX.json)"
+  HTTP_CODE="$(curl --silent --location --output "${RESPONSE_FILE}" --write-out '%{http_code}' \
     --request PATCH \
     "${GO_API_URL}" \
     --header "Authorization: Bearer ${GO_NCSU_API_TOKEN}" \
@@ -146,12 +147,15 @@ if [[ -n "${GO_NCSU_API_TOKEN}" && -n "${GO_NCSU_LINK_SLUG}" ]]; then
       \"target_url\": \"${TUNNEL_URL}\",
       \"enabled\": true,
       \"exclude_from_status_check\": true
-    }" 2>&1)" || true
+    }")" || true
+  RESPONSE_BODY="$(cat "${RESPONSE_FILE}" 2>/dev/null)"
+  rm -f "${RESPONSE_FILE}"
 
   if [[ "${HTTP_CODE}" =~ ^2[0-9][0-9]$ ]]; then
     log "go.ncsu.edu link updated successfully (HTTP ${HTTP_CODE})."
   else
     warn "go.ncsu.edu API returned HTTP ${HTTP_CODE}. Link may not have been updated."
+    warn "Response: ${RESPONSE_BODY}"
   fi
 else
   warn "GO_NCSU_API_TOKEN or GO_NCSU_LINK_SLUG not set; skipping go.ncsu.edu update."

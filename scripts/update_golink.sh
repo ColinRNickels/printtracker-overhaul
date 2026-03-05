@@ -81,7 +81,8 @@ GO_API_URL="https://go.ncsu.edu/api/v2/links/${GO_NCSU_LINK_SLUG}"
 
 echo "Updating go.ncsu.edu/${GO_NCSU_LINK_SLUG} → ${TARGET_URL} ..."
 
-HTTP_RESPONSE="$(curl --silent --write-out '\n%{http_code}' \
+RESPONSE_FILE="$(mktemp /tmp/golink-resp-XXXX.json)"
+HTTP_CODE="$(curl --silent --location --output "${RESPONSE_FILE}" --write-out '%{http_code}' \
   --request PATCH \
   "${GO_API_URL}" \
   --header "Authorization: Bearer ${GO_NCSU_API_TOKEN}" \
@@ -91,15 +92,15 @@ HTTP_RESPONSE="$(curl --silent --write-out '\n%{http_code}' \
     \"target_url\": \"${TARGET_URL}\",
     \"enabled\": true,
     \"exclude_from_status_check\": true
-  }" 2>&1)"
-
-HTTP_BODY="$(echo "${HTTP_RESPONSE}" | head -n -1)"
-HTTP_CODE="$(echo "${HTTP_RESPONSE}" | tail -1)"
+  }")" || true
+RESPONSE_BODY="$(cat "${RESPONSE_FILE}" 2>/dev/null)"
+rm -f "${RESPONSE_FILE}"
 
 if [[ "${HTTP_CODE}" =~ ^2[0-9][0-9]$ ]]; then
   echo "Success (HTTP ${HTTP_CODE})."
+  echo "${RESPONSE_BODY}"
 else
   echo "Failed (HTTP ${HTTP_CODE})." >&2
-  echo "${HTTP_BODY}" >&2
+  echo "${RESPONSE_BODY}" >&2
   exit 1
 fi
