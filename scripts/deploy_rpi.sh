@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-
 SERVICE_NAME="print-tracker"
 SERVICE_USER="${SUDO_USER:-${USER}}"
 SERVICE_GROUP="$(id -gn "${SERVICE_USER}" 2>/dev/null || echo "${SERVICE_USER}")"
+REPO_URL="https://github.com/ColinRNickels/printtracker.git"
+DEPLOY_DIR=""
 PORT="5000"
 PRINT_MODE="cups"
 PRINTER_QUEUE="QL800"
@@ -37,6 +36,7 @@ Options:
   --service-group GROUP    Linux group that runs the app service.
   --port PORT              App port (default: 5000).
   --print-mode MODE        "cups" or "mock" (default: cups).
+  --repo-dir PATH          Where to clone/update the repo (default: ~/PrintTracker).
   --printer-queue NAME     CUPS queue name (default: QL800).
   --media NAME             CUPS media token (default: DK-1202).
   --staff-password PASS     Staff dashboard password (required).
@@ -261,6 +261,10 @@ while [[ $# -gt 0 ]]; do
       PRINT_MODE="$2"
       shift 2
       ;;
+    --repo-dir)
+      DEPLOY_DIR="$2"
+      shift 2
+      ;;
     --printer-queue)
       PRINTER_QUEUE="$2"
       shift 2
@@ -327,7 +331,24 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ -f "${PROJECT_DIR}/requirements.txt" ]] || die "Run this script from inside the project repository."
+# --- Clone or update the repository -------------------------------------------
+if [[ -z "${DEPLOY_DIR}" ]]; then
+  SERVICE_HOME="$(getent passwd "${SERVICE_USER}" 2>/dev/null | cut -d: -f6 || echo "${HOME}")"
+  DEPLOY_DIR="${SERVICE_HOME}/PrintTracker"
+fi
+
+if [[ -d "${DEPLOY_DIR}/.git" ]]; then
+  log "Updating existing repo at ${DEPLOY_DIR}..."
+  git -C "${DEPLOY_DIR}" fetch --all
+  git -C "${DEPLOY_DIR}" reset --hard origin/main
+else
+  log "Cloning ${REPO_URL} into ${DEPLOY_DIR}..."
+  git clone "${REPO_URL}" "${DEPLOY_DIR}"
+fi
+
+PROJECT_DIR="${DEPLOY_DIR}"
+
+[[ -f "${PROJECT_DIR}/requirements.txt" ]] || die "Repository clone failed or requirements.txt is missing."
 [[ "${PRINT_MODE}" == "cups" || "${PRINT_MODE}" == "mock" ]] || die "--print-mode must be cups or mock."
 
 if [[ "${NON_INTERACTIVE}" -eq 0 ]]; then
@@ -434,6 +455,14 @@ log "Kiosk URL base (for QR links): ${KIOSK_BASE_URL}"
 
 if [[ "${SKIP_APT}" -eq 0 ]]; then
   log "Installing system packages (this can take several minutes)..."
+
+  # Remove stale Cloudflare apt repo if present (cloudflared is installed
+  # via direct .deb download below, not through their apt repo).
+  if [[ -f /etc/apt/sources.list.d/cloudflared.list ]]; then
+    log "Removing stale Cloudflare apt repo entry..."
+    run_root rm -f /etc/apt/sources.list.d/cloudflared.list
+  fi
+
   run_root apt-get update
   APT_PACKAGES=(
     git
@@ -447,8 +476,8 @@ if [[ "${SKIP_APT}" -eq 0 ]]; then
 
   if ! command -v cloudflared >/dev/null 2>&1; then
     log "Installing cloudflared..."
-    local cfd_deb="/tmp/cloudflared.deb"
-    local cfd_arch="amd64"
+    cfd_deb="/tmp/cloudflared.deb"
+    cfd_arch="amd64"
     case "$(dpkg --print-architecture)" in
       arm64|aarch64) cfd_arch="arm64" ;;
       armhf|armv7l)  cfd_arch="arm"   ;;
