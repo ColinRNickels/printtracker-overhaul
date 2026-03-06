@@ -1,38 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Print Registered — Print Tracker{% endblock %}
 {% block content %}
-<section class="panel">
-    <h2 class="success-heading">Print Registered</h2>
-    <p class="status-line success">Your label is printing. Please see staff if it doesn't appear.</p>
+<section class="panel kiosk-compact">
+    <h2 class="success-heading">You're All Set</h2>
+    <p class="status-line success">Your label is printing now.</p>
     {% if sync_error %}
         <p class="status-line warning">Saved locally, but cloud sync failed. Please tell staff.</p>
     {% endif %}
-    <p><strong>Print ID:</strong> {{ job.label_code }}</p>
-    <p>{{ label_result.message }}</p>
-
-    <ul class="summary-list">
-        <li><strong>File Name:</strong> {{ job.file_name }}</li>
-        <li><strong>Project Type:</strong> {{ job.category_label }}</li>
-        {% if job.course_number %}
-            <li><strong>Course #:</strong> {{ job.course_number }}</li>
-        {% endif %}
-        {% if job.instructor %}
-            <li><strong>Instructor:</strong> {{ job.instructor }}</li>
-        {% endif %}
-        {% if job.department %}
-            <li><strong>Department:</strong> {{ job.department }}</li>
-        {% endif %}
-        {% if job.pi_name %}
-            <li><strong>PI:</strong> {{ job.pi_name }}</li>
-        {% endif %}
-    </ul>
-
-    {% if label_result.image_path %}
-        <div class="qr-block">
-            <p>Printable label preview:</p>
-            <img src="{{ url_for('kiosk.label_preview', label_code=job.label_code) }}" alt="Generated label preview">
-        </div>
-    {% endif %}
+    <p class="muted-line">Print ID: {{ job.label_code }} &middot; {{ job.file_name }}</p>
 
     <div class="form-actions success-cta">
         <a class="button-primary-link" href="{{ url_for('kiosk.register') }}">
@@ -45,7 +20,7 @@
     (() => {
         const targetUrl = "{{ url_for('kiosk.register') }}";
         const countdownEl = document.getElementById("successCountdown");
-        let seconds = 30;
+        let seconds = 10;
         const tick = () => {
             if (countdownEl) {
                 countdownEl.textContent = `(${seconds}s)`;

@@ -111,24 +111,36 @@
                     }
                 }
 
-                /* Confirmation before sending email + loading state */
+                /* Inline confirmation before sending email */
+                let awaitingConfirm = false;
                 form.addEventListener("submit", (e) => {
-                    const selected = form.querySelector('input[name="completion_status"]:checked');
-                    const status = selected ? selected.value : "finished";
-                    const verb = status === "failed" ? "FAILED" : "Finished";
-                    if (!confirm(`Mark this print as ${verb} and email the patron?`)) {
-                        e.preventDefault();
+                    if (awaitingConfirm) {
+                        /* Second click = real submit */
+                        if (completedByInput && completedByInput.value.trim()) {
+                            localStorage.setItem("pt_completed_by", completedByInput.value.trim());
+                        }
+                        if (submitBtn) {
+                            submitBtn.disabled = true;
+                            submitBtn.textContent = "Sending\u2026";
+                            submitBtn.classList.add("btn-loading");
+                        }
                         return;
                     }
-                    /* Save staff name for next time */
-                    if (completedByInput && completedByInput.value.trim()) {
-                        localStorage.setItem("pt_completed_by", completedByInput.value.trim());
-                    }
-                    if (submitBtn) {
-                        submitBtn.disabled = true;
-                        submitBtn.textContent = "Sending\u2026";
-                        submitBtn.classList.add("btn-loading");
-                    }
+                    e.preventDefault();
+                    awaitingConfirm = true;
+                    const selected = form.querySelector('input[name="completion_status"]:checked');
+                    const status = selected ? selected.value : "finished";
+                    const verb = status === "failed" ? "Failed" : "Finished";
+                    submitBtn.textContent = `Confirm: ${verb} & Email?`;
+                    submitBtn.classList.add("btn-confirm-pending");
+                    /* Reset after 4 seconds if user doesn't confirm */
+                    setTimeout(() => {
+                        if (awaitingConfirm) {
+                            awaitingConfirm = false;
+                            submitBtn.textContent = "Mark Complete and Notify User";
+                            submitBtn.classList.remove("btn-confirm-pending");
+                        }
+                    }, 4000);
                 });
             })();
         </script>

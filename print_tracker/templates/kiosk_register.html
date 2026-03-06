@@ -100,14 +100,11 @@
             department.required = showResearchFields;
             piName.required = showResearchFields;
 
-            if (!showAcademicFields) {
-                courseNumber.value = "";
-                instructor.value = "";
-            }
-            if (!showResearchFields) {
-                department.value = "";
-                piName.value = "";
-            }
+            /* Preserve entered values — only hide, don't clear */
+            courseNumber.disabled = !showAcademicFields;
+            instructor.disabled = !showAcademicFields;
+            department.disabled = !showResearchFields;
+            piName.disabled = !showResearchFields;
 
             for (const card of typeCards) {
                 const input = card.querySelector('input[name="category"]');

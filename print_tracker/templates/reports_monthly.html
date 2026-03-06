@@ -123,7 +123,7 @@
     </div>
 </section>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script src="{{ url_for('static', filename='chart.umd.min.js') }}"></script>
 <script>
     (() => {
         const chartData = {{ chart_data|tojson }};

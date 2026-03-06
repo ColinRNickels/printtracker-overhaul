@@ -12,13 +12,13 @@
         <a class="brand" href="{{ url_for('kiosk.register') }}" aria-label="NC State University Libraries Makerspace Print Tracker">
             <img src="{{ url_for('static', filename='ncsu-makerspace-logo-long-v2.png') }}" alt="NC State University Libraries Makerspace logo">
         </a>
+        {% if not on_kiosk_route %}
         <nav>
             <a href="{{ url_for('kiosk.register') }}" {% if request.endpoint and request.endpoint.startswith('kiosk.') %}class="nav-active"{% endif %}>Kiosk</a>
             <a href="{{ url_for('staff.dashboard') }}" {% if request.endpoint and request.endpoint.startswith('staff.') %}class="nav-active"{% endif %}>Staff</a>
-            {% if not on_kiosk_route %}
-                <a href="{{ url_for('reports.monthly') }}" {% if request.endpoint and request.endpoint.startswith('reports.') %}class="nav-active"{% endif %}>Reports</a>
-            {% endif %}
+            <a href="{{ url_for('reports.monthly') }}" {% if request.endpoint and request.endpoint.startswith('reports.') %}class="nav-active"{% endif %}>Reports</a>
         </nav>
+        {% endif %}
     </header>
 
     <main>
