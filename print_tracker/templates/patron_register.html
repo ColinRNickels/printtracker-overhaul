@@ -9,31 +9,31 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-grid two-col compact-row">
             <label>
-                First name
+                <span>First name<span class="required-star" aria-hidden="true"> *</span></span>
                 <input id="first_name" name="first_name" value="{{ form.first_name }}" required maxlength="60" autocomplete="given-name" enterkeyhint="next">
             </label>
             <label>
-                Last name
+                <span>Last name<span class="required-star" aria-hidden="true"> *</span></span>
                 <input id="last_name" name="last_name" value="{{ form.last_name }}" required maxlength="60" autocomplete="family-name" enterkeyhint="next">
             </label>
         </div>
 
         <div class="form-grid two-col compact-row">
             <label>
-                Email
+                <span>Email<span class="required-star" aria-hidden="true"> *</span></span>
                 <div class="email-field">
                     <input id="user_email_local" name="user_email_local" value="{{ form.user_email_local }}" required maxlength="120" inputmode="email" autocomplete="username" autocapitalize="none" spellcheck="false" enterkeyhint="next" placeholder="unityid or unityid@ncsu.edu">
                     <span>@{{ ncsu_domain }}</span>
                 </div>
             </label>
             <label>
-                File name
+                <span>File name<span class="required-star" aria-hidden="true"> *</span></span>
                 <input id="file_name" name="file_name" value="{{ form.file_name }}" required maxlength="140" placeholder="example-v2.stl" autocapitalize="none" spellcheck="false" enterkeyhint="next">
             </label>
         </div>
 
         <fieldset class="type-grid compact-types">
-            <legend>Project type</legend>
+            <legend>Project type <span class="required-star" aria-hidden="true">*</span></legend>
             {% for value, label in category_options %}
                 <label class="type-card {% if form.category == value %}active{% endif %}">
                     <input type="radio" name="category" value="{{ value }}" {% if form.category == value %}checked{% endif %} required>

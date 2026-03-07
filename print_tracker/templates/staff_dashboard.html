@@ -18,10 +18,6 @@
             <span>QR mode</span>
         </div>
     </div>
-    <form method="post" action="{{ url_for('staff.logout') }}" class="inline-action">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="button-link button-danger">Lock Staff Page</button>
-    </form>
 
     <form method="post" action="{{ url_for('staff.scan') }}" class="scan-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -30,6 +26,11 @@
             <input id="scanValue" name="scan_value" autofocus placeholder="Scan value or code" autocomplete="off" autocapitalize="characters" spellcheck="false">
         </label>
         <button type="submit">Open Job</button>
+    </form>
+
+    <form method="post" action="{{ url_for('staff.logout') }}" class="inline-action">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="button-link button-danger">Lock Staff Page</button>
     </form>
 </section>
 

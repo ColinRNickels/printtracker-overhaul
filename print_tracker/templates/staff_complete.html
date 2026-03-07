@@ -56,7 +56,7 @@
 
             <label>
                 Completed by
-                <input id="completedBy" name="completed_by" value="{{ form_data.completed_by }}" maxlength="120" required>
+                <input id="completedBy" name="completed_by" value="{{ form_data.completed_by }}" maxlength="120" required autocomplete="name">
             </label>
 
             <label for="completionNotes">
@@ -91,11 +91,15 @@
                 }
                 sync();
 
-                /* Toggle active class on option-pills */
+                /* Toggle active class on option-pills with status-specific colors */
                 const syncPills = () => {
                     for (const pill of form.querySelectorAll('.option-pill')) {
                         const radio = pill.querySelector('input[type="radio"]');
-                        pill.classList.toggle('active', radio && radio.checked);
+                        const isChecked = radio && radio.checked;
+                        pill.classList.remove('active', 'active-finished', 'active-failed');
+                        if (isChecked) {
+                            pill.classList.add(radio.value === 'failed' ? 'active-failed' : 'active-finished');
+                        }
                     }
                 };
                 for (const input of form.querySelectorAll('input[name="completion_status"]')) {

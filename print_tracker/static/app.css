@@ -249,6 +249,13 @@ textarea {
     margin-bottom: 0.35rem;
 }
 
+.required-star {
+    color: var(--danger);
+    font-size: 0.75em;
+    vertical-align: super;
+    line-height: 1;
+}
+
 .type-grid {
     display: grid;
     grid-template-columns: 1fr;
@@ -1052,6 +1059,18 @@ nav a.nav-active {
     border-color: var(--brand);
     background: #fef2f2;
     box-shadow: 0 0 0 1px var(--brand);
+}
+
+.option-pill.active-finished {
+    border-color: var(--success);
+    background: #f0faf4;
+    box-shadow: 0 0 0 1px var(--success);
+}
+
+.option-pill.active-failed {
+    border-color: var(--danger);
+    background: #fef2f2;
+    box-shadow: 0 0 0 1px var(--danger);
 }
 
 /* ================================================================
