@@ -33,7 +33,9 @@ def _load_font(size: int) -> ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
-def _text_height(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> int:
+def _text_height(
+    draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont
+) -> int:
     left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
     return bottom - top
 
@@ -197,7 +199,9 @@ def _render_label_image(
 
     cleaned_brand_text = " ".join((brand_text or "").split())
     if cleaned_brand_text and not logo_drawn:
-        for line in _wrap_text(draw, cleaned_brand_text, font=brand_font, max_width=text_max_width):
+        for line in _wrap_text(
+            draw, cleaned_brand_text, font=brand_font, max_width=text_max_width
+        ):
             line_h = _text_height(draw, line, brand_font)
             if y + line_h > text_max_y:
                 break
@@ -210,7 +214,9 @@ def _render_label_image(
         draw.line((margin, y, width - margin, y), fill=0, width=1)
         y += max(8, margin // 4)
 
-    for line in _wrap_text(draw, "PRINT IN PROGRESS", font=title_font, max_width=text_max_width):
+    for line in _wrap_text(
+        draw, "PRINT IN PROGRESS", font=title_font, max_width=text_max_width
+    ):
         line_h = _text_height(draw, line, title_font)
         if y + line_h > text_max_y:
             break
@@ -234,7 +240,10 @@ def _render_label_image(
     draw.line((margin, y, width - margin, y), fill=0, width=2)
     y += max(8, margin // 4)
 
-    detail_lines = [shorten(job.file_name, width=62, placeholder="..."), job.category_label]
+    detail_lines = [
+        shorten(job.file_name, width=62, placeholder="..."),
+        job.category_label,
+    ]
     if job.course_number:
         detail_lines.append(shorten(job.course_number, width=42, placeholder="..."))
     if job.instructor:
@@ -245,7 +254,9 @@ def _render_label_image(
         detail_lines.append(shorten(job.pi_name, width=42, placeholder="..."))
 
     for raw_line in detail_lines:
-        for line in _wrap_text(draw, raw_line, font=body_font, max_width=text_max_width):
+        for line in _wrap_text(
+            draw, raw_line, font=body_font, max_width=text_max_width
+        ):
             line_h = _text_height(draw, line, body_font)
             if y + line_h > text_max_y:
                 break
@@ -263,7 +274,9 @@ def _render_label_image(
 
     qr = build_qr_image(qr_payload, size=qr_size)
     image.paste(qr, (qr_x, qr_y))
-    draw.rectangle((qr_x - 1, qr_y - 1, qr_x + qr_size, qr_y + qr_size), outline=0, width=1)
+    draw.rectangle(
+        (qr_x - 1, qr_y - 1, qr_x + qr_size, qr_y + qr_size), outline=0, width=1
+    )
 
     return image
 
@@ -276,7 +289,9 @@ def _cups_command_for_image(
     orientation: str,
     extra_options: str,
 ) -> list[str]:
-    orientation_requested = "3" if _normalize_orientation(orientation) == "portrait" else "4"
+    orientation_requested = (
+        "3" if _normalize_orientation(orientation) == "portrait" else "4"
+    )
     cmd = [
         "lp",
         "-d",
@@ -361,16 +376,24 @@ def create_and_print_label(
 
     if mode != "cups":
         if save_label_files:
-            result["message"] = f"Label image generated for {stock} (mock mode, not sent to printer)."
+            result["message"] = (
+                f"Label image generated for {stock} (mock mode, not sent to printer)."
+            )
         else:
             result["message"] = (
                 f"Label prepared for {stock} (mock mode, not sent to printer and not saved to disk)."
             )
-        log.info("Label mode is '%s' (not cups) — skipping print. %s", mode, result["message"])
+        log.info(
+            "Label mode is '%s' (not cups) — skipping print. %s",
+            mode,
+            result["message"],
+        )
         return result
 
     if not queue_name:
-        result["message"] = "LABEL_PRINTER_QUEUE is not configured, so printing was skipped."
+        result["message"] = (
+            "LABEL_PRINTER_QUEUE is not configured, so printing was skipped."
+        )
         log.warning("%s", result["message"])
         return result
 
@@ -379,7 +402,9 @@ def create_and_print_label(
     if persistent_file_path:
         file_path_for_print = str(persistent_file_path)
     else:
-        with tempfile.NamedTemporaryFile(prefix=f"{job.label_code}-", suffix=".png", delete=False) as temp_file:
+        with tempfile.NamedTemporaryFile(
+            prefix=f"{job.label_code}-", suffix=".png", delete=False
+        ) as temp_file:
             temp_file_path = Path(temp_file.name)
         image.save(temp_file_path)
         file_path_for_print = str(temp_file_path)
