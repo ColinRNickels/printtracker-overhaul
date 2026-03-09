@@ -1,8 +1,11 @@
+import logging
 import subprocess
 import tempfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from textwrap import shorten
+
+log = logging.getLogger(__name__)
 
 import qrcode
 from PIL import Image, ImageDraw, ImageFont
@@ -363,10 +366,12 @@ def create_and_print_label(
             result["message"] = (
                 f"Label prepared for {stock} (mock mode, not sent to printer and not saved to disk)."
             )
+        log.info("Label mode is '%s' (not cups) — skipping print. %s", mode, result["message"])
         return result
 
     if not queue_name:
         result["message"] = "LABEL_PRINTER_QUEUE is not configured, so printing was skipped."
+        log.warning("%s", result["message"])
         return result
 
     temp_file_path: Path | None = None
@@ -379,23 +384,27 @@ def create_and_print_label(
         image.save(temp_file_path)
         file_path_for_print = str(temp_file_path)
 
+    cups_cmd = _cups_command_for_image(
+        queue_name=queue_name,
+        file_path=file_path_for_print,
+        media=cups_media,
+        orientation=label_orientation,
+        extra_options=cups_extra_options,
+    )
+    log.info("Sending label to CUPS: %s", " ".join(cups_cmd))
     try:
         process = subprocess.run(
-            _cups_command_for_image(
-                queue_name=queue_name,
-                file_path=file_path_for_print,
-                media=cups_media,
-                orientation=label_orientation,
-                extra_options=cups_extra_options,
-            ),
+            cups_cmd,
             check=True,
             capture_output=True,
             text=True,
         )
         result["printed"] = True
         result["message"] = process.stdout.strip() or "Label sent to printer queue."
+        log.info("CUPS print succeeded: %s", result["message"])
     except Exception as exc:  # noqa: BLE001
         result["message"] = f"Printing failed: {exc}"
+        log.error("CUPS print failed: %s", exc)
     finally:
         if temp_file_path and temp_file_path.exists():
             try:

@@ -19,6 +19,8 @@ SITE_ID=""
 LOCATION_NAME="Makerspace"
 LOGO_SOURCE=""
 NON_INTERACTIVE=0
+UPDATE_MODE=0
+DELETE_MODE=0
 SKIP_APT=0
 SKIP_SERVICE=0
 SKIP_CUPS=0
@@ -146,6 +148,10 @@ Automates Raspberry Pi deployment for Print Tracker.
 Run from the project root after cloning the repository.
 
 Options:
+  --update                 Quick update: pull code, reinstall deps, restart services.
+                           Skips the wizard; reads all config from the existing .env.
+  --delete                 Remove Print Tracker: stop services, delete repo,
+                           remove systemd units and .env. Prompts for confirmation.
   --non-interactive        Use defaults and skip prompts.
   --service-user USER      Linux user that runs the app service.
   --service-group GROUP    Linux group that runs the app service.
@@ -166,7 +172,7 @@ Options:
   --google-worksheet NAME  Worksheet tab name (default: PrintJobs).
   --setup-tunnel           Set up a Cloudflare quick tunnel (free, no domain needed).
   --no-tunnel              Skip Cloudflare Tunnel setup.
-  --setup-golink           Create a go.ncsu.edu short link during deploy.
+  --setup-golink           Update a go.ncsu.edu short link during deploy.
   --no-golink              Skip go.ncsu.edu short link setup.
   --go-ncsu-api-token TOKEN
                            API token for go.ncsu.edu.
@@ -357,6 +363,8 @@ run_google_oauth_setup() {
 # ── CLI flag parsing ──────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --update)                UPDATE_MODE=1;                   shift ;;
+    --delete)                DELETE_MODE=1;                   shift ;;
     --non-interactive)       NON_INTERACTIVE=1;               shift ;;
     --service-user)          SERVICE_USER="$2";               shift 2 ;;
     --service-group)         SERVICE_GROUP="$2";              shift 2 ;;
@@ -395,12 +403,65 @@ if [[ "${GOOGLE_SPREADSHEET_ID}" == *"docs.google.com/spreadsheets"* ]]; then
   GOOGLE_SPREADSHEET_ID="$(printf '%s' "${GOOGLE_SPREADSHEET_ID}" | sed -n 's|.*spreadsheets/d/\([^/]*\).*|\1|p')"
 fi
 
-# ── Clone or update the repository ────────────────────────────────────────
+# ── Resolve deploy directory ───────────────────────────────────────────────
 if [[ -z "${DEPLOY_DIR}" ]]; then
   SERVICE_HOME="$(getent passwd "${SERVICE_USER}" 2>/dev/null | cut -d: -f6 || echo "${HOME}")"
   DEPLOY_DIR="${SERVICE_HOME}/PrintTracker"
 fi
 
+# ── Handle --delete early (no clone needed) ───────────────────────────────
+if [[ "${DELETE_MODE}" -eq 1 ]]; then
+  tui_banner "Uninstall Print Tracker"
+  printf '\n'
+  tui_warn "This will permanently remove:"
+  tui_hint "systemd services (${SERVICE_NAME}, cloudflared-quick)"
+  tui_hint "Application directory (${DEPLOY_DIR})"
+  tui_hint ".env, database, labels, OAuth tokens — everything"
+  printf '\n'
+  tui_explain "This cannot be undone."
+  printf '\n'
+
+  if [[ "${NON_INTERACTIVE}" -eq 0 ]]; then
+    if ! prompt_yes_no "Are you sure you want to delete everything" "n"; then
+      printf '\n'
+      tui_success "Aborted — nothing was deleted."
+      exit 0
+    fi
+  fi
+
+  printf '\n'
+  # Stop and remove services
+  for svc in "${SERVICE_NAME}" cloudflared-quick; do
+    if run_root systemctl list-unit-files 2>/dev/null | grep -q "^${svc}\.service"; then
+      tui_progress "Stopping ${svc}"
+      run_root systemctl stop "${svc}" 2>/dev/null || true
+      run_root systemctl disable "${svc}" 2>/dev/null || true
+      run_root rm -f "/etc/systemd/system/${svc}.service"
+      tui_success "Removed ${svc}.service"
+    fi
+  done
+  run_root systemctl daemon-reload 2>/dev/null || true
+
+  # Remove the application directory
+  if [[ -d "${DEPLOY_DIR}" ]]; then
+    tui_progress "Removing ${DEPLOY_DIR}"
+    rm -rf "${DEPLOY_DIR}"
+    tui_success "Deleted ${DEPLOY_DIR}"
+  else
+    tui_warn "${DEPLOY_DIR} does not exist — nothing to remove."
+  fi
+
+  printf '\n'
+  tui_banner "Uninstall Complete"
+  printf '\n'
+  tui_success "Print Tracker has been removed from this system."
+  tui_explain "System packages (python3, cups, cloudflared) were left in place."
+  tui_explain "To remove them too:  sudo apt remove cloudflared cups"
+  printf '\n'
+  exit 0
+fi
+
+# ── Clone or update the repository ────────────────────────────────────────
 if [[ -d "${DEPLOY_DIR}/.git" ]]; then
   log "Updating existing repo at ${DEPLOY_DIR}..."
   git -C "${DEPLOY_DIR}" fetch --all
@@ -416,6 +477,128 @@ PROJECT_DIR="${DEPLOY_DIR}"
 # guarantees a valid value via numbered menu when interactive).
 if [[ "${NON_INTERACTIVE}" -eq 1 ]]; then
   [[ "${PRINT_MODE}" == "cups" || "${PRINT_MODE}" == "mock" ]] || die "Print mode must be 'cups' or 'mock'."
+fi
+
+APP_DIR="${PROJECT_DIR}"
+ENV_FILE="${APP_DIR}/.env"
+VENV_DIR="${APP_DIR}/.venv"
+
+# ╔═══════════════════════════════════════════════════════════════════════╗
+# ║                      --update  (FAST PATH)                           ║
+# ╚═══════════════════════════════════════════════════════════════════════╝
+
+if [[ "${UPDATE_MODE}" -eq 1 ]]; then
+  [[ -f "${ENV_FILE}" ]] || die "No .env found at ${ENV_FILE}. Run a full deploy first (without --update)."
+
+  tui_banner "Quick Update"
+  tui_explain "Pulling latest code, reinstalling dependencies, and restarting services."
+  printf '\n'
+
+  # 1. Code is already updated (git fetch/reset ran above)
+  tui_success "Code updated to latest commit."
+
+  # 2. Reinstall Python deps
+  tui_progress "Installing Python dependencies"
+  if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
+    python3 -m venv "${VENV_DIR}"
+  fi
+  "${VENV_DIR}/bin/python" -m pip install --upgrade pip -q
+  "${VENV_DIR}/bin/python" -m pip install -r "${APP_DIR}/requirements.txt" gunicorn -q
+  tui_success "Python packages up to date."
+
+  # 3. Run DB migrations (safe to re-run)
+  tui_progress "Checking database"
+  (cd "${APP_DIR}" && "${VENV_DIR}/bin/flask" --app run.py init-db) 2>/dev/null || true
+  tui_success "Database OK."
+
+  # 4. Restart services
+  if run_root systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE_NAME}\.service"; then
+    tui_progress "Restarting ${SERVICE_NAME}"
+    run_root systemctl restart "${SERVICE_NAME}"
+    tui_success "${SERVICE_NAME} restarted."
+  else
+    tui_warn "${SERVICE_NAME}.service not found — run a full deploy to create it."
+  fi
+
+  if run_root systemctl list-unit-files 2>/dev/null | grep -q "^cloudflared-quick\.service"; then
+    tui_progress "Restarting cloudflared-quick"
+    run_root systemctl restart cloudflared-quick
+    tui_success "cloudflared-quick restarted (new tunnel URL will be detected)."
+  fi
+
+  printf '\n'
+  tui_banner "Update Complete"
+  printf '\n'
+  tui_success "Latest code is live."
+  tui_explain "If you need to change settings, re-run the deploy without --update."
+  printf '\n'
+  exit 0
+fi
+
+# ╔═══════════════════════════════════════════════════════════════════════╗
+# ║            PRE-FILL DEFAULTS FROM EXISTING .env                       ║
+# ╚═══════════════════════════════════════════════════════════════════════╝
+
+# When re-running the full wizard on a Pi that was already deployed, load
+# the current .env values so prompts show the previously-chosen answers
+# instead of hard-coded defaults.  CLI flags still take priority.
+
+if [[ -f "${ENV_FILE}" ]]; then
+  _env_val() { get_env_value "${ENV_FILE}" "$1"; }
+
+  _maybe() {
+    # _maybe VARNAME ENV_KEY — set VARNAME from .env if VARNAME is still the
+    # hard-coded default (i.e. the user didn't pass a CLI flag).
+    local varname="$1" key="$2" default="${3:-}" current=""
+    current="${!varname}"
+    if [[ "${current}" == "${default}" || -z "${current}" ]]; then
+      local env_val=""
+      env_val="$(_env_val "${key}")"
+      if [[ -n "${env_val}" ]]; then
+        printf -v "${varname}" '%s' "${env_val}"
+      fi
+    fi
+  }
+
+  _maybe PORT                "PORT"                          "5000"
+  _maybe PRINT_MODE          "LABEL_PRINT_MODE"              "cups"
+  _maybe PRINTER_QUEUE       "LABEL_PRINTER_QUEUE"           "QL800"
+  _maybe LABEL_MEDIA         "LABEL_CUPS_MEDIA"              "DK-1202"
+  _maybe LOCATION_NAME       "DEFAULT_PRINTER_NAME"          "Makerspace"
+  _maybe SITE_ID             "SITE_ID"                       ""
+  _maybe GO_NCSU_API_TOKEN   "GO_NCSU_API_TOKEN"             ""
+  _maybe GO_NCSU_LINK_SLUG   "GO_NCSU_LINK_SLUG"             ""
+  _maybe GOOGLE_GMAIL_SENDER "GOOGLE_GMAIL_SENDER"           "library_makerspace@ncsu.edu"
+  _maybe GOOGLE_SPREADSHEET_ID "GOOGLE_SHEETS_SPREADSHEET_ID" ""
+  _maybe GOOGLE_WORKSHEET    "GOOGLE_SHEETS_WORKSHEET"       "PrintJobs"
+
+  # Pre-fill staff password so the user isn't forced to re-enter it.
+  _existing_pw="$(_env_val "STAFF_PASSWORD")"
+  if [[ -n "${_existing_pw}" && -z "${STAFF_PASSWORD}" ]]; then
+    STAFF_PASSWORD="${_existing_pw}"
+  fi
+
+  # Pre-fill tunnel / golink decisions based on whether they were configured.
+  if [[ "${SETUP_TUNNEL}" -lt 0 ]]; then
+    if run_root systemctl list-unit-files 2>/dev/null | grep -q "^cloudflared-quick\.service"; then
+      SETUP_TUNNEL=1
+    fi
+  fi
+  if [[ "${SETUP_GOLINK}" -lt 0 ]]; then
+    _existing_slug="$(_env_val "GO_NCSU_LINK_SLUG")"
+    _existing_token="$(_env_val "GO_NCSU_API_TOKEN")"
+    if [[ -n "${_existing_slug}" && -n "${_existing_token}" ]]; then
+      SETUP_GOLINK=1
+    fi
+  fi
+  if [[ "${SETUP_GOOGLE_OAUTH}" -lt 0 ]]; then
+    _existing_email_provider="$(_env_val "EMAIL_PROVIDER")"
+    if [[ "${_existing_email_provider}" == "gmail_api" ]]; then
+      SETUP_GOOGLE_OAUTH=0   # already configured, don't re-run OAuth flow
+    fi
+  fi
+
+  log "Loaded existing settings from ${ENV_FILE} as wizard defaults."
 fi
 
 # ╔═══════════════════════════════════════════════════════════════════════╗
@@ -461,7 +644,11 @@ LOGO
   if [[ -z "${STAFF_PASSWORD}" ]]; then
     prompt_password
   else
-    tui_success "Password was provided via command-line flag."
+    tui_success "Password already set (from previous deploy or command-line flag)."
+    if prompt_yes_no "Change the staff password" "n"; then
+      STAFF_PASSWORD=""
+      prompt_password
+    fi
   fi
 
   # ╭───────────────────────────────────────────────────────────────────────╮
@@ -596,28 +783,42 @@ LOGO
   # ╰───────────────────────────────────────────────────────────────────────╯
   tui_step_header "go.ncsu.edu Short Link"
 
-  tui_explain "Print Tracker can create a permanent short link at go.ncsu.edu"
-  tui_explain "that redirects to your app. For example:"
+  tui_explain "If you have a go.ncsu.edu short link, this step will update it to"
+  tui_explain "point to your app's tunnel URL. For example:"
   printf '\n'
   tui_explain "    go.ncsu.edu/makerspace-print  →  https://<your-tunnel-url>"
   printf '\n'
-  tui_explain "This is useful for printed signs, label QR codes, or sharing"
-  tui_explain "with users. The link stays the same even if the tunnel URL changes."
+  tui_explain "The short link stays the same even when the tunnel URL changes."
+  tui_explain "Useful for printed signs, label QR codes, and sharing with users."
   printf '\n'
-  tui_explain "You need a go.ncsu.edu API token to do this."
+  tui_hint "You should have already created the short link at go.ncsu.edu."
+  tui_explain "  If you haven't, go to https://go.ncsu.edu, sign in, and create"
+  tui_explain "  one first — then come back and re-run the deploy script."
   printf '\n'
-  tui_hint "How to get a token:"
+  tui_hint "You also need a go.ncsu.edu API token."
   tui_explain "  1. Go to https://go.ncsu.edu/api/help"
   tui_explain "  2. Enter a token name (e.g. 'print-tracker')"
   tui_explain "  3. Click 'Create Token'"
   tui_explain "  4. Copy the token ID — you only see it once!"
-  tui_explain "  5. Paste it here when prompted"
   printf '\n'
-  tui_hint "If you don't have a token yet, say NO — you can set this up later."
+  tui_hint "If you don't have a short link or token yet, say NO."
 
   if [[ "${SETUP_GOLINK}" -lt 0 ]]; then
-    if prompt_yes_no "Create a go.ncsu.edu short link" "y"; then
+    if prompt_yes_no "Update a go.ncsu.edu short link" "y"; then
       SETUP_GOLINK=1
+      printf '\n'
+
+      # -- Link slug --
+      tui_rule '·'
+      tui_explain "  Enter the slug of your existing go.ncsu.edu short link."
+      tui_explain "  This is the part after go.ncsu.edu/ — for example, if your"
+      tui_explain "  link is go.ncsu.edu/makerspace-print-label, enter:"
+      tui_explain "    makerspace-print-label"
+      if [[ -z "${GO_NCSU_LINK_SLUG}" ]]; then
+        GO_NCSU_LINK_SLUG="$(prompt_default "Short link slug" "makerspace-print-label")"
+      else
+        tui_success "Link slug provided via command-line flag: ${GO_NCSU_LINK_SLUG}"
+      fi
       printf '\n'
 
       # -- API token --
@@ -635,21 +836,7 @@ LOGO
         tui_warn "No token provided — skipping golink setup."
         SETUP_GOLINK=0
       else
-        # -- Link slug --
-        tui_rule '·'
-        tui_explain "  Choose a short-link slug. This is the part after go.ncsu.edu/"
-        tui_explain "  For example, entering 'makerspace-print' would create:"
-        tui_explain "    go.ncsu.edu/makerspace-print"
-        printf '\n'
-        tui_explain "  Use lowercase letters, numbers, and hyphens."
-        tui_explain "  If the name is already taken, you'll be able to try another."
-        if [[ -z "${GO_NCSU_LINK_SLUG}" ]]; then
-          GO_NCSU_LINK_SLUG="$(prompt_default "Short link slug" "makerspace-print-label")"
-        else
-          tui_success "Link slug provided via command-line flag: ${GO_NCSU_LINK_SLUG}"
-        fi
-        printf '\n'
-        tui_success "GoLink will be created during installation."
+        tui_success "go.ncsu.edu/${GO_NCSU_LINK_SLUG} will be updated during installation."
       fi
     else
       SETUP_GOLINK=0
@@ -831,13 +1018,11 @@ fi
 # ║                         INSTALLATION                                  ║
 # ╚═══════════════════════════════════════════════════════════════════════╝
 
-APP_DIR="${PROJECT_DIR}"
+# APP_DIR, ENV_FILE, VENV_DIR are already set above (before the wizard).
 INSTANCE_DIR="${APP_DIR}/instance"
 LABEL_DIR="${APP_DIR}/labels"
 ASSETS_DIR="${APP_DIR}/assets"
 LOGO_DEST="${ASSETS_DIR}/makerspace-logo.png"
-ENV_FILE="${APP_DIR}/.env"
-VENV_DIR="${APP_DIR}/.venv"
 DEFAULT_LOGO_SOURCE="${APP_DIR}/print_tracker/static/ncsu-makerspace-logo-long-v2.png"
 
 if [[ "${APP_DIR}" == *" "* ]]; then
@@ -1044,14 +1229,18 @@ if [[ "${SETUP_TUNNEL}" -eq 1 ]]; then
 Description=Cloudflare Quick Tunnel for Print Tracker
 After=network-online.target ${SERVICE_NAME}.service
 Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Environment=APP_PORT=${PORT}
 Environment=ENV_FILE=${ENV_FILE}
 Environment=SERVICE_NAME=${SERVICE_NAME}
+Environment=GO_NCSU_API_TOKEN=${GO_NCSU_API_TOKEN}
+Environment=GO_NCSU_LINK_SLUG=${GO_NCSU_LINK_SLUG}
 ExecStart=${TUNNEL_SCRIPT}
 Restart=always
-RestartSec=5
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
@@ -1061,7 +1250,7 @@ CFDEOF
 
     sleep 5
     TUNNEL_URL="$(journalctl -u cloudflared-quick --no-pager -n 50 2>/dev/null \
-      | grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1 || true)"
+      | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1 || true)"
     TUNNEL_CONFIGURED=1
     tui_success "Cloudflare tunnel service started."
   fi
@@ -1079,59 +1268,38 @@ if [[ "${SETUP_GOLINK}" -eq 1 && -n "${GO_NCSU_API_TOKEN}" && -n "${GO_NCSU_LINK
     GOLINK_TARGET="${KIOSK_BASE_URL}"
   fi
 
-  tui_progress "Creating go.ncsu.edu/${GO_NCSU_LINK_SLUG}"
+  tui_progress "Updating go.ncsu.edu/${GO_NCSU_LINK_SLUG} → ${GOLINK_TARGET}"
 
-  # Loop to allow retries if the slug is taken
-  while true; do
-    GO_API_URL="https://go.ncsu.edu/api/v2/links"
-    GOLINK_RESP_FILE="$(mktemp /tmp/golink-create-XXXX.json)"
-    GOLINK_HTTP_CODE="$(curl --silent --location \
-      --output "${GOLINK_RESP_FILE}" --write-out '%{http_code}' \
-      --request POST "${GO_API_URL}" \
-      --header "Authorization: Bearer ${GO_NCSU_API_TOKEN}" \
-      --header "Content-Type: application/json" \
-      --header "Accept: application/json" \
-      --data "{
-        \"slug\": \"${GO_NCSU_LINK_SLUG}\",
-        \"target_url\": \"${GOLINK_TARGET}\",
-        \"enabled\": true,
-        \"exclude_from_status_check\": true
-      }")" || true
-    GOLINK_RESP_BODY="$(cat "${GOLINK_RESP_FILE}" 2>/dev/null)"
-    rm -f "${GOLINK_RESP_FILE}"
+  GO_API_URL="https://go.ncsu.edu/api/v2/links/${GO_NCSU_LINK_SLUG}"
+  GOLINK_RESP_FILE="$(mktemp /tmp/golink-patch-XXXX.json)"
+  GOLINK_HTTP_CODE="$(curl --silent --location \
+    --output "${GOLINK_RESP_FILE}" --write-out '%{http_code}' \
+    --request PATCH "${GO_API_URL}" \
+    --header "Authorization: Bearer ${GO_NCSU_API_TOKEN}" \
+    --header "Content-Type: application/json" \
+    --header "Accept: application/json" \
+    --data "{
+      \"target_url\": \"${GOLINK_TARGET}\",
+      \"enabled\": true,
+      \"exclude_from_status_check\": true
+    }")" || true
+  GOLINK_RESP_BODY="$(cat "${GOLINK_RESP_FILE}" 2>/dev/null)"
+  rm -f "${GOLINK_RESP_FILE}"
 
-    if [[ "${GOLINK_HTTP_CODE}" =~ ^2[0-9][0-9]$ ]]; then
-      set_env_value "${ENV_FILE}" "GO_NCSU_LINK_SLUG" "${GO_NCSU_LINK_SLUG}"
-      GOLINK_CONFIGURED=1
-      tui_success "Created go.ncsu.edu/${GO_NCSU_LINK_SLUG} → ${GOLINK_TARGET}"
-      break
-    elif [[ "${GOLINK_HTTP_CODE}" == "409" || "${GOLINK_RESP_BODY}" == *"already"* || "${GOLINK_RESP_BODY}" == *"taken"* || "${GOLINK_RESP_BODY}" == *"exists"* || "${GOLINK_RESP_BODY}" == *"conflict"* ]]; then
-      tui_warn "The slug '${GO_NCSU_LINK_SLUG}' is already taken on go.ncsu.edu."
-      if [[ "${NON_INTERACTIVE}" -eq 1 ]]; then
-        tui_warn "Non-interactive mode — cannot retry. Skipping golink creation."
-        break
-      fi
-      if prompt_yes_no "Try a different slug name" "y"; then
-        GO_NCSU_LINK_SLUG="$(prompt_default "Short link slug" "")"
-        printf '\n'
-        if [[ -z "${GO_NCSU_LINK_SLUG}" ]]; then
-          tui_warn "No slug provided — skipping golink creation."
-          break
-        fi
-        tui_progress "Trying go.ncsu.edu/${GO_NCSU_LINK_SLUG}"
-      else
-        tui_warn "Skipping golink creation."
-        break
-      fi
-    else
-      tui_fail "Failed to create golink (HTTP ${GOLINK_HTTP_CODE})."
-      if [[ -n "${GOLINK_RESP_BODY}" ]]; then
-        tui_explain "  API response: ${GOLINK_RESP_BODY}"
-      fi
-      tui_warn "You can create the link manually later or re-run the deploy script."
-      break
+  if [[ "${GOLINK_HTTP_CODE}" =~ ^2[0-9][0-9]$ ]]; then
+    set_env_value "${ENV_FILE}" "GO_NCSU_LINK_SLUG" "${GO_NCSU_LINK_SLUG}"
+    GOLINK_CONFIGURED=1
+    tui_success "Updated go.ncsu.edu/${GO_NCSU_LINK_SLUG} → ${GOLINK_TARGET}"
+  elif [[ "${GOLINK_HTTP_CODE}" == "404" ]]; then
+    tui_fail "Short link '${GO_NCSU_LINK_SLUG}' does not exist on go.ncsu.edu."
+    tui_explain "  Create it first at https://go.ncsu.edu, then re-run the deploy."
+  else
+    tui_fail "Failed to update golink (HTTP ${GOLINK_HTTP_CODE})."
+    if [[ -n "${GOLINK_RESP_BODY}" ]]; then
+      tui_explain "  API response: ${GOLINK_RESP_BODY}"
     fi
-  done
+    tui_warn "You can update the link manually by running:  ./scripts/update_golink.sh"
+  fi
 elif [[ "${SETUP_GOLINK}" -eq 1 ]]; then
   tui_warn "GoLink setup requested but token or slug is missing — skipping."
 fi

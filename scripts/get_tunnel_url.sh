@@ -15,7 +15,7 @@ ENV_FILE="${ENV_FILE:-${APP_DIR}/.env}"
 TUNNEL_URL=""
 if command -v journalctl >/dev/null 2>&1; then
   TUNNEL_URL="$(journalctl -u cloudflared-quick --no-pager -n 80 2>/dev/null \
-    | grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1 || true)"
+    | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1 || true)"
 fi
 
 # --- Fallback: read KIOSK_BASE_URL from .env ---

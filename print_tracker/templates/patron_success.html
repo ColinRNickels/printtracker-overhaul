@@ -25,30 +25,15 @@
 
     <p class="muted-line">Print ID: {{ job.label_code }} &middot; {{ job.file_name }}</p>
 
-    <div class="form-actions success-cta">
-        <a class="button-primary-link" href="{{ url_for('patron.register') }}">
-            Register Another Print <span id="successCountdown"></span>
-        </a>
-    </div>
+    <p class="muted-line" id="countdown">This screen will reset in <span id="seconds">10</span>s</p>
+    <script>
+        (function() {
+            var s = 10, el = document.getElementById('seconds');
+            var t = setInterval(function() {
+                s--; el.textContent = s;
+                if (s <= 0) { clearInterval(t); window.location.href = "{{ url_for('patron.register') }}"; }
+            }, 1000);
+        })();
+    </script>
 </section>
-
-<script>
-    (() => {
-        const targetUrl = "{{ url_for('patron.register') }}";
-        const countdownEl = document.getElementById("successCountdown");
-        let seconds = 10;
-        const tick = () => {
-            if (countdownEl) {
-                countdownEl.textContent = `(${seconds}s)`;
-            }
-            if (seconds <= 0) {
-                window.location.assign(targetUrl);
-                return;
-            }
-            seconds -= 1;
-            setTimeout(tick, 1000);
-        };
-        tick();
-    })();
-</script>
 {% endblock %}

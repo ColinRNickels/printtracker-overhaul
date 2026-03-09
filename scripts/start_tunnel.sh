@@ -13,12 +13,14 @@
 set -Euo pipefail
 
 # ----- Configuration (override via environment) ----- #
+export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH}"
 SERVICE_NAME="${SERVICE_NAME:-print-tracker}"
 APP_PORT="${APP_PORT:-5000}"
 ENV_FILE="${ENV_FILE:-}"
 GO_NCSU_API_TOKEN="${GO_NCSU_API_TOKEN:-}"
 GO_NCSU_LINK_SLUG="${GO_NCSU_LINK_SLUG:-makerspace-print-label}"
-MAX_WAIT="${TUNNEL_WAIT_SECONDS:-30}"
+MAX_WAIT="${TUNNEL_WAIT_SECONDS:-60}"
+NET_WAIT="${NETWORK_WAIT_SECONDS:-60}"
 
 # Resolve ENV_FILE: if not supplied, look next to this script's parent dir
 if [[ -z "${ENV_FILE}" ]]; then
@@ -92,6 +94,21 @@ if [[ -z "${GO_NCSU_LINK_SLUG}" && -f "${ENV_FILE}" ]]; then
   GO_NCSU_LINK_SLUG="$(get_env_value "${ENV_FILE}" "GO_NCSU_LINK_SLUG")"
 fi
 
+# ----- Wait for network connectivity ----- #
+net_elapsed=0
+while [[ ${net_elapsed} -lt ${NET_WAIT} ]]; do
+  if curl --silent --max-time 3 --head https://cloudflare.com >/dev/null 2>&1; then
+    log "Network is reachable."
+    break
+  fi
+  log "Waiting for network... (${net_elapsed}/${NET_WAIT}s)"
+  sleep 3
+  net_elapsed=$((net_elapsed + 3))
+done
+if [[ ${net_elapsed} -ge ${NET_WAIT} ]]; then
+  warn "Network not reachable after ${NET_WAIT}s — starting cloudflared anyway."
+fi
+
 # ----- Start cloudflared in the background, capture output ----- #
 TUNNEL_LOG="$(mktemp /tmp/cloudflared-tunnel-XXXX.log)"
 trap 'rm -f "${TUNNEL_LOG}"' EXIT
@@ -105,7 +122,7 @@ CFD_PID=$!
 TUNNEL_URL=""
 elapsed=0
 while [[ ${elapsed} -lt ${MAX_WAIT} ]]; do
-  TUNNEL_URL="$(grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' "${TUNNEL_LOG}" | tail -1 || true)"
+  TUNNEL_URL="$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "${TUNNEL_LOG}" | tail -1 || true)"
   if [[ -n "${TUNNEL_URL}" ]]; then
     break
   fi

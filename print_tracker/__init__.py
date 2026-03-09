@@ -1,10 +1,13 @@
 from pathlib import Path
 
 from dotenv import load_dotenv
-from flask import Flask, redirect, url_for
+from flask import Flask, flash, redirect, request, session, url_for
+from urllib.parse import urlparse
 from sqlalchemy import event, inspect, text
 from sqlalchemy.engine import Engine, make_url
 from werkzeug.middleware.proxy_fix import ProxyFix
+
+from flask_wtf.csrf import CSRFError
 
 from .extensions import csrf, db, limiter
 
@@ -154,6 +157,15 @@ def create_app() -> Flask:
         db.create_all()
         _apply_schema_upgrades()
         print("Database initialized.")
+
+    @app.errorhandler(CSRFError)
+    def handle_csrf_error(e):
+        session.clear()
+        flash("Your session expired. Please try again.", "error")
+        referrer = request.referrer
+        if referrer and urlparse(referrer).netloc == request.host:
+            return redirect(referrer)
+        return redirect(request.url)
 
     _warn_for_insecure_defaults(app)
 
