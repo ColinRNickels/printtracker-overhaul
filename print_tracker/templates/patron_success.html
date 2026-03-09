@@ -5,9 +5,9 @@
     <h2 class="success-heading">You're All Set</h2>
     {% if label_result and label_result.printed %}
         <p class="status-line success">Your label is printing now.</p>
-    {% elif label_result and label_result.image_path %}
+    {% elif label_result %}
         <p class="status-line success">Your print has been registered.</p>
-        <p class="muted-line">Label was saved but not sent to a printer. Ask staff for your label.</p>
+        <p class="muted-line">{{ label_result.message }}</p>
     {% else %}
         <p class="status-line success">Your print has been registered.</p>
         <p class="muted-line">No label was printed. Ask staff for next steps.</p>
@@ -24,16 +24,5 @@
     </ol>
 
     <p class="muted-line">Print ID: {{ job.label_code }} &middot; {{ job.file_name }}</p>
-
-    <p class="muted-line" id="countdown">This screen will reset in <span id="seconds">10</span>s</p>
-    <script>
-        (function() {
-            var s = 10, el = document.getElementById('seconds');
-            var t = setInterval(function() {
-                s--; el.textContent = s;
-                if (s <= 0) { clearInterval(t); window.location.href = "{{ url_for('patron.register') }}"; }
-            }, 1000);
-        })();
-    </script>
 </section>
 {% endblock %}

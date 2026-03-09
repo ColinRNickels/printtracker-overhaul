@@ -497,7 +497,26 @@ if [[ "${UPDATE_MODE}" -eq 1 ]]; then
   # 1. Code is already updated (git fetch/reset ran above)
   tui_success "Code updated to latest commit."
 
-  # 2. Reinstall Python deps
+  # 2. Migrate stale .env values from earlier deploys
+  tui_progress "Checking .env for stale settings"
+  _cur_media="$(get_env_value "${ENV_FILE}" "LABEL_CUPS_MEDIA")"
+  _cur_queue="$(get_env_value "${ENV_FILE}" "LABEL_PRINTER_QUEUE")"
+  _env_migrated=0
+  if [[ "${_cur_media}" == "DK-1202" ]]; then
+    set_env_value "${ENV_FILE}" "LABEL_CUPS_MEDIA" "62x100mm"
+    tui_success "Migrated LABEL_CUPS_MEDIA: DK-1202 → 62x100mm"
+    _env_migrated=1
+  fi
+  if [[ "${_cur_queue}" == "QL800" ]]; then
+    set_env_value "${ENV_FILE}" "LABEL_PRINTER_QUEUE" "QL-800"
+    tui_success "Migrated LABEL_PRINTER_QUEUE: QL800 → QL-800"
+    _env_migrated=1
+  fi
+  if [[ "${_env_migrated}" -eq 0 ]]; then
+    tui_success ".env settings are current."
+  fi
+
+  # 3. Reinstall Python deps
   tui_progress "Installing Python dependencies"
   if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
     python3 -m venv "${VENV_DIR}"
@@ -506,12 +525,12 @@ if [[ "${UPDATE_MODE}" -eq 1 ]]; then
   "${VENV_DIR}/bin/python" -m pip install -r "${APP_DIR}/requirements.txt" gunicorn -q
   tui_success "Python packages up to date."
 
-  # 3. Run DB migrations (safe to re-run)
+  # 4. Run DB migrations (safe to re-run)
   tui_progress "Checking database"
   (cd "${APP_DIR}" && "${VENV_DIR}/bin/flask" --app run.py init-db) 2>/dev/null || true
   tui_success "Database OK."
 
-  # 4. Restart services
+  # 5. Restart services
   if [[ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]]; then
     tui_progress "Restarting ${SERVICE_NAME}"
     run_root systemctl restart "${SERVICE_NAME}"
@@ -1248,11 +1267,24 @@ CFDEOF
     run_root systemctl daemon-reload
     run_root systemctl enable --now cloudflared-quick
 
-    sleep 5
-    TUNNEL_URL="$(journalctl -u cloudflared-quick --no-pager -n 50 2>/dev/null \
-      | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1 || true)"
     TUNNEL_CONFIGURED=1
     tui_success "Cloudflare tunnel service started."
+
+    # Wait for the tunnel URL to appear in the journal (up to 30s).
+    tui_progress "Waiting for tunnel URL"
+    _tw=0
+    while [[ ${_tw} -lt 30 ]]; do
+      TUNNEL_URL="$(journalctl -u cloudflared-quick --no-pager -n 100 2>/dev/null \
+        | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1 || true)"
+      [[ -n "${TUNNEL_URL}" ]] && break
+      sleep 2
+      _tw=$((_tw + 2))
+    done
+    if [[ -n "${TUNNEL_URL}" ]]; then
+      tui_success "Tunnel URL: ${TUNNEL_URL}"
+    else
+      tui_warn "Tunnel URL not detected yet — start_tunnel.sh will update the golink when it appears."
+    fi
   fi
 fi
 
@@ -1264,11 +1296,16 @@ if [[ "${SETUP_GOLINK}" -eq 1 && -n "${GO_NCSU_API_TOKEN}" && -n "${GO_NCSU_LINK
   GOLINK_TARGET=""
   if [[ "${TUNNEL_CONFIGURED}" -eq 1 && -n "${TUNNEL_URL:-}" ]]; then
     GOLINK_TARGET="${TUNNEL_URL}"
+  elif [[ "${TUNNEL_CONFIGURED}" -eq 1 ]]; then
+    tui_warn "Skipping golink update — tunnel URL not available yet."
+    tui_explain "start_tunnel.sh will update the golink automatically when the tunnel connects."
+    GOLINK_TARGET=""
   else
     GOLINK_TARGET="${KIOSK_BASE_URL}"
   fi
 
-  tui_progress "Updating go.ncsu.edu/${GO_NCSU_LINK_SLUG} → ${GOLINK_TARGET}"
+  if [[ -n "${GOLINK_TARGET}" ]]; then
+    tui_progress "Updating go.ncsu.edu/${GO_NCSU_LINK_SLUG} → ${GOLINK_TARGET}"
 
   GO_API_URL="https://go.ncsu.edu/api/v2/links/${GO_NCSU_LINK_SLUG}"
   GOLINK_RESP_FILE="$(mktemp /tmp/golink-patch-XXXX.json)"
@@ -1300,6 +1337,7 @@ if [[ "${SETUP_GOLINK}" -eq 1 && -n "${GO_NCSU_API_TOKEN}" && -n "${GO_NCSU_LINK
     fi
     tui_warn "You can update the link manually by running:  ./scripts/update_golink.sh"
   fi
+  fi  # end GOLINK_TARGET non-empty check
 elif [[ "${SETUP_GOLINK}" -eq 1 ]]; then
   tui_warn "GoLink setup requested but token or slug is missing — skipping."
 fi

@@ -179,7 +179,7 @@ else
 fi
 
 # ----- Restart print-tracker so it picks up the new KIOSK_BASE_URL ----- #
-if systemctl list-unit-files | grep -q "^${SERVICE_NAME}\.service"; then
+if [[ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]]; then
   log "Restarting ${SERVICE_NAME} to pick up new KIOSK_BASE_URL..."
   systemctl restart "${SERVICE_NAME}" || warn "Failed to restart ${SERVICE_NAME}."
 else
