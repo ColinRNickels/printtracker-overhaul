@@ -219,7 +219,7 @@ prompt_choice() {
   for i in "${!options[@]}"; do
     local marker="  "
     [[ $((i + 1)) -eq ${default_num} ]] && marker="${C_CYAN}>${C_RESET} "
-    printf '    %s%b%d)%b  %s\n' "${marker}" "${C_BOLD}" "$((i + 1))" "${C_RESET}" "${options[$i]}" >/dev/tty
+    printf '    %b%b%d)%b  %s\n' "${marker}" "${C_BOLD}" "$((i + 1))" "${C_RESET}" "${options[$i]}" >/dev/tty
   done
 
   if [[ "${NON_INTERACTIVE}" -eq 1 ]]; then
