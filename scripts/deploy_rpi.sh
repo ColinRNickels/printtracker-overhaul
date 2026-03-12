@@ -1244,14 +1244,24 @@ if [[ "${SKIP_CUPS}" -eq 0 ]]; then
     fi
   fi
 
+  # Resolve the best available PPD for the Brother QL label printer.
+  BROTHER_PPD="$(lpinfo -m 2>/dev/null | grep -i 'Brother-QL-800-ptouch-ql' | head -1 | awk '{print $1}' || true)"
+
   # Attempt to auto-create the CUPS printer queue if it doesn't exist yet.
   if [[ "${PRINT_MODE}" == "cups" ]] && ! lpstat -e 2>/dev/null | grep -qx "${PRINTER_QUEUE}"; then
     BROTHER_URI="$(lpinfo -v 2>/dev/null | grep -Ei 'usb.*brother|usb.*ql' | head -1 | awk '{print $2}' || true)"
     if [[ -n "${BROTHER_URI}" ]]; then
       tui_progress "Creating CUPS queue '${PRINTER_QUEUE}' → ${BROTHER_URI}"
-      run_root lpadmin -p "${PRINTER_QUEUE}" -E -v "${BROTHER_URI}" -m everywhere 2>/dev/null \
-        || run_root lpadmin -p "${PRINTER_QUEUE}" -E -v "${BROTHER_URI}" 2>/dev/null \
-        || true
+      if [[ -n "${BROTHER_PPD}" ]]; then
+        run_root lpadmin -p "${PRINTER_QUEUE}" -E -v "${BROTHER_URI}" -m "${BROTHER_PPD}" 2>/dev/null \
+          || run_root lpadmin -p "${PRINTER_QUEUE}" -E -v "${BROTHER_URI}" -m everywhere 2>/dev/null \
+          || run_root lpadmin -p "${PRINTER_QUEUE}" -E -v "${BROTHER_URI}" 2>/dev/null \
+          || true
+      else
+        run_root lpadmin -p "${PRINTER_QUEUE}" -E -v "${BROTHER_URI}" -m everywhere 2>/dev/null \
+          || run_root lpadmin -p "${PRINTER_QUEUE}" -E -v "${BROTHER_URI}" 2>/dev/null \
+          || true
+      fi
       if lpstat -e 2>/dev/null | grep -qx "${PRINTER_QUEUE}"; then
         tui_success "CUPS queue '${PRINTER_QUEUE}' created."
       else
@@ -1259,9 +1269,18 @@ if [[ "${SKIP_CUPS}" -eq 0 ]]; then
       fi
     else
       tui_warn "No Brother USB device URI found — plug in the printer and run:"
-      tui_explain "  sudo lpadmin -p ${PRINTER_QUEUE} -E -v <device-uri> -m everywhere"
+      tui_explain "  sudo lpadmin -p ${PRINTER_QUEUE} -E -v <device-uri> -m <ppd>"
     fi
   elif [[ "${PRINT_MODE}" == "cups" ]]; then
+    # Queue exists — ensure the ptouch PPD is assigned (driverless/missing PPD
+    # causes the printer to silently ignore raw image data).
+    if [[ -n "${BROTHER_PPD}" ]] && ! lpoptions -p "${PRINTER_QUEUE}" -l 2>/dev/null | grep -q 'PageSize'; then
+      BROTHER_URI="$(lpstat -v 2>/dev/null | grep "${PRINTER_QUEUE}" | awk '{print $NF}' || true)"
+      if [[ -n "${BROTHER_URI}" ]]; then
+        tui_progress "Assigning ptouch PPD to existing queue '${PRINTER_QUEUE}'"
+        run_root lpadmin -p "${PRINTER_QUEUE}" -v "${BROTHER_URI}" -m "${BROTHER_PPD}" -E 2>/dev/null || true
+      fi
+    fi
     tui_success "CUPS queue '${PRINTER_QUEUE}' already exists."
   fi
 else

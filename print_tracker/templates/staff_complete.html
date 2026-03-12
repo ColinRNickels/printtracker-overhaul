@@ -36,7 +36,7 @@
                 <p><strong>Email details:</strong> {{ job.email_error }}</p>
             {% endif %}
             {% if job.completion_notes %}
-                <p><strong>{% if job.status == 'failed' %}Failure description{% else %}Completion notes{% endif %}:</strong> {{ job.completion_notes }}</p>
+                <p><strong>{% if job.status == 'failed' %}Failure description{% elif job.status == 'cancelled' %}Cancellation reason{% else %}Completion notes{% endif %}:</strong> {{ job.completion_notes }}</p>
             {% endif %}
         </div>
     {% else %}
@@ -51,6 +51,10 @@
                 <label class="option-pill">
                     <input type="radio" name="completion_status" value="failed" {% if form_data.completion_status == 'failed' %}checked{% endif %}>
                     Failed
+                </label>
+                <label class="option-pill">
+                    <input type="radio" name="completion_status" value="cancelled" {% if form_data.completion_status == 'cancelled' %}checked{% endif %}>
+                    Cancelled
                 </label>
             </fieldset>
 
@@ -81,10 +85,15 @@
                 const sync = () => {
                     const selected = form.querySelector('input[name="completion_status"]:checked');
                     const isFailed = selected && selected.value === "failed";
+                    const isCancelled = selected && selected.value === "cancelled";
                     notes.required = Boolean(isFailed);
-                    notesLabel.textContent = isFailed
-                        ? "Failure description (required)"
-                        : "Notes for user/staff (optional)";
+                    if (isFailed) {
+                        notesLabel.textContent = "Failure description (required)";
+                    } else if (isCancelled) {
+                        notesLabel.textContent = "Cancellation reason (optional)";
+                    } else {
+                        notesLabel.textContent = "Notes for user/staff (optional)";
+                    }
                 };
 
                 for (const input of form.querySelectorAll('input[name="completion_status"]')) {
@@ -97,9 +106,11 @@
                     for (const pill of form.querySelectorAll('.option-pill')) {
                         const radio = pill.querySelector('input[type="radio"]');
                         const isChecked = radio && radio.checked;
-                        pill.classList.remove('active', 'active-finished', 'active-failed');
+                        pill.classList.remove('active', 'active-finished', 'active-failed', 'active-cancelled');
                         if (isChecked) {
-                            pill.classList.add(radio.value === 'failed' ? 'active-failed' : 'active-finished');
+                            if (radio.value === 'failed') pill.classList.add('active-failed');
+                            else if (radio.value === 'cancelled') pill.classList.add('active-cancelled');
+                            else pill.classList.add('active-finished');
                         }
                     }
                 };
@@ -135,8 +146,8 @@
                     awaitingConfirm = true;
                     const selected = form.querySelector('input[name="completion_status"]:checked');
                     const status = selected ? selected.value : "finished";
-                    const verb = status === "failed" ? "Failed" : "Finished";
-                    submitBtn.textContent = `Confirm: ${verb} & Email?`;
+                    const verb = status === "failed" ? "Failed" : status === "cancelled" ? "Cancel (no email)" : "Finished";
+                    submitBtn.textContent = `Confirm: ${verb}?`;
                     submitBtn.classList.add("btn-confirm-pending");
                     /* Reset after 4 seconds if user doesn't confirm */
                     setTimeout(() => {

@@ -4,6 +4,7 @@ from datetime import date
 from ..models import (
     JOB_CATEGORIES,
     JOB_CATEGORY_RESEARCH,
+    JOB_STATUS_CANCELLED,
     JOB_STATUS_FAILED,
     JOB_STATUS_FINISHED,
     JOB_STATUS_IN_PROGRESS,
@@ -33,6 +34,7 @@ def build_monthly_summary(jobs: list) -> dict:
             JOB_STATUS_IN_PROGRESS: status_counts.get(JOB_STATUS_IN_PROGRESS, 0),
             JOB_STATUS_FINISHED: status_counts.get(JOB_STATUS_FINISHED, 0),
             JOB_STATUS_FAILED: status_counts.get(JOB_STATUS_FAILED, 0),
+            JOB_STATUS_CANCELLED: status_counts.get(JOB_STATUS_CANCELLED, 0),
         },
         "average_turnaround_hours": avg_hours,
     }

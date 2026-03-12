@@ -95,6 +95,11 @@
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="button-link button-link-reprint">Reprint</button>
                 </form>
+                <form method="post" action="{{ url_for('staff.cancel_job', label_code=job.label_code) }}" class="inline-action cancel-form">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="completed_by" class="cancel-staff-name" value="">
+                    <button type="submit" class="button-link button-link-cancel">Cancel</button>
+                </form>
             </div>
         </div>
         {% else %}
@@ -176,6 +181,43 @@
             btn.closest("form").addEventListener("submit", () => {
                 btn.disabled = true;
                 btn.textContent = "Sending\u2026";
+            });
+        }
+
+        /* ---- Cancel button: double-press to confirm ---- */
+        let staffName = localStorage.getItem("pt_completed_by") || "";
+        for (const field of document.querySelectorAll(".cancel-staff-name")) {
+            field.value = staffName;
+        }
+        for (const form of document.querySelectorAll(".cancel-form")) {
+            let awaiting = false;
+            let timer = null;
+            const btn = form.querySelector(".button-link-cancel");
+            form.addEventListener("submit", (e) => {
+                if (!staffName) {
+                    e.preventDefault();
+                    const entered = (prompt("Enter your staff name to cancel:") || "").trim();
+                    if (!entered) return;
+                    staffName = entered;
+                    localStorage.setItem("pt_completed_by", staffName);
+                    for (const f of document.querySelectorAll(".cancel-staff-name")) {
+                        f.value = staffName;
+                    }
+                }
+                if (awaiting) {
+                    btn.disabled = true;
+                    btn.textContent = "Cancelling\u2026";
+                    return;
+                }
+                e.preventDefault();
+                awaiting = true;
+                btn.textContent = "Confirm?";
+                btn.classList.add("btn-confirm-pending");
+                timer = setTimeout(() => {
+                    awaiting = false;
+                    btn.textContent = "Cancel";
+                    btn.classList.remove("btn-confirm-pending");
+                }, 4000);
             });
         }
     })();

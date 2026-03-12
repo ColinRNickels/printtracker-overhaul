@@ -234,7 +234,6 @@ def _render_label_image(
     detail_lines = [
         shorten(job.file_name, width=62, placeholder="..."),
         job.category_label,
-        f"Printed: {date.today().strftime('%b %d, %Y')}",
     ]
     if job.course_number:
         detail_lines.append(shorten(job.course_number, width=42, placeholder="..."))
@@ -245,16 +244,22 @@ def _render_label_image(
     if job.pi_name:
         detail_lines.append(shorten(job.pi_name, width=42, placeholder="..."))
 
+    # Reserve space for the date and ID lines at the bottom (above QR).
+    date_line = f"Printed: {date.today().strftime('%m-%d-%y')}"
+    date_line_h = _text_height(draw, date_line, body_font)
+    date_y = id_y - date_line_h - max(4, margin // 6)
+    detail_max_y = date_y - max(4, margin // 6)
+
     for raw_line in detail_lines:
         for line in _wrap_text(
             draw, raw_line, font=body_font, max_width=text_max_width
         ):
             line_h = _text_height(draw, line, body_font)
-            if y + line_h > text_max_y:
+            if y + line_h > detail_max_y:
                 break
             draw.text((margin, y), line, fill=0, font=body_font)
             y += line_h + max(6, margin // 4)
-        if y >= text_max_y:
+        if y >= detail_max_y:
             break
 
     # Large date field below print details

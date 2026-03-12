@@ -1073,6 +1073,12 @@ nav a.nav-active {
     box-shadow: 0 0 0 1px var(--danger);
 }
 
+.option-pill.active-cancelled {
+    border-color: var(--warning);
+    background: #fefce8;
+    box-shadow: 0 0 0 1px var(--warning);
+}
+
 /* ================================================================
    Label preview (thermal labels are rectangular, not square)
    ================================================================ */
@@ -1104,5 +1110,10 @@ nav a.nav-active {
 
 .status-failed {
     color: var(--danger);
+    font-weight: 600;
+}
+
+.status-cancelled {
+    color: var(--warning);
     font-weight: 600;
 }

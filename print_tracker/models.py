@@ -5,11 +5,13 @@ from .extensions import db
 JOB_STATUS_IN_PROGRESS = "in_progress"
 JOB_STATUS_FINISHED = "finished"
 JOB_STATUS_FAILED = "failed"
+JOB_STATUS_CANCELLED = "cancelled"
 
 JOB_STATUS_LABELS = {
     JOB_STATUS_IN_PROGRESS: "In Progress",
     JOB_STATUS_FINISHED: "Finished",
     JOB_STATUS_FAILED: "Failed",
+    JOB_STATUS_CANCELLED: "Cancelled",
 }
 
 JOB_CATEGORY_PERSONAL = "personal_project"
@@ -70,6 +72,8 @@ class PrintJob(db.Model):
     ) -> None:
         if outcome == JOB_STATUS_FINISHED:
             self.status = JOB_STATUS_FINISHED
+        elif outcome == JOB_STATUS_CANCELLED:
+            self.status = JOB_STATUS_CANCELLED
         else:
             self.status = JOB_STATUS_FAILED
         self.completed_by = completed_by
@@ -78,7 +82,7 @@ class PrintJob(db.Model):
 
     @property
     def is_completed(self) -> bool:
-        return self.status in {JOB_STATUS_FINISHED, JOB_STATUS_FAILED}
+        return self.status in {JOB_STATUS_FINISHED, JOB_STATUS_FAILED, JOB_STATUS_CANCELLED}
 
     @property
     def file_name(self) -> str:

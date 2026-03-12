@@ -15,6 +15,7 @@ from werkzeug.security import check_password_hash
 
 from ..extensions import db, limiter
 from ..models import (
+    JOB_STATUS_CANCELLED,
     JOB_STATUS_FAILED,
     JOB_STATUS_FINISHED,
     JOB_STATUS_IN_PROGRESS,
@@ -170,7 +171,7 @@ def dashboard():
     )
     recently_completed = (
         PrintJob.query.filter(
-            PrintJob.status.in_([JOB_STATUS_FINISHED, JOB_STATUS_FAILED])
+            PrintJob.status.in_([JOB_STATUS_FINISHED, JOB_STATUS_FAILED, JOB_STATUS_CANCELLED])
         )
         .order_by(PrintJob.completed_at.desc())
         .limit(25)
@@ -266,6 +267,40 @@ def reprint(label_code: str):
             fallback_endpoint="staff.dashboard",
         )
     )
+
+
+@bp.route("/cancel/<label_code>", methods=["POST"])
+def cancel_job(label_code: str):
+    job = PrintJob.query.filter_by(label_code=label_code.upper()).first_or_404()
+    if job.is_completed:
+        flash("This job is already completed.", "warning")
+        return redirect(url_for("staff.dashboard"))
+
+    completed_by = " ".join(request.form.get("completed_by", "").split())
+    if not completed_by:
+        flash("Staff name is required to cancel a job.", "error")
+        return redirect(url_for("staff.dashboard"))
+
+    job.mark_completed(
+        outcome=JOB_STATUS_CANCELLED,
+        completed_by=completed_by,
+        completion_notes=None,
+    )
+    job.email_status = "skipped"
+    job.email_error = "Email not sent for cancelled jobs."
+    db.session.commit()
+
+    sync_ok, sync_error = sync_job_to_google_sheet(job)
+    if not sync_ok:
+        current_app.logger.warning(
+            "Google Sheets sync failed for %s at cancellation: %s",
+            job.label_code,
+            sync_error,
+        )
+        flash(f"Google Sheets sync failed: {sync_error}", "warning")
+
+    flash(f"{job.label_code} cancelled.", "success")
+    return redirect(url_for("staff.dashboard"))
 
 
 @bp.route("/complete/<label_code>", methods=["GET", "POST"])
