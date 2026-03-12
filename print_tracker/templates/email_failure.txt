@@ -1,6 +1,6 @@
 Hi {{ job.user_name }},
 
-Thank you for using the NC State Libraries {{ location }}! We wanted to let you know that your 3D print ran into an issue. Unfortunately, this print was not able to complete successfully.
+Thank you for using the NC State University Libraries {{ location }}! We wanted to let you know that your 3D print ran into an issue. Unfortunately, this print was not able to complete successfully.
 
 Print ID: {{ job.label_code }}
 Project type: {{ job.category_label }}

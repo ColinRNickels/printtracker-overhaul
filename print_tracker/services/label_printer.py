@@ -189,7 +189,7 @@ def _render_label_image(
     brand_logo = _load_brand_logo(brand_logo_path)
     if brand_logo:
         max_logo_w = text_max_width
-        max_logo_h = max(48, min(height // 6, _mm_to_px(14, dpi)))
+        max_logo_h = max(48, min(height // 4, _mm_to_px(22, dpi)))
         scaled_logo = brand_logo.copy()
         scaled_logo.thumbnail((max_logo_w, max_logo_h), Image.Resampling.NEAREST)
         logo_x = margin + (max_logo_w - scaled_logo.width) // 2
@@ -215,7 +215,7 @@ def _render_label_image(
         y += max(8, margin // 4)
 
     for line in _wrap_text(
-        draw, "PRINT IN PROGRESS", font=title_font, max_width=text_max_width
+        draw, "3D PRINT", font=title_font, max_width=text_max_width
     ):
         line_h = _text_height(draw, line, title_font)
         if y + line_h > text_max_y:
@@ -243,6 +243,7 @@ def _render_label_image(
     detail_lines = [
         shorten(job.file_name, width=62, placeholder="..."),
         job.category_label,
+        f"Printed: {date.today().strftime('%b %d, %Y')}",
     ]
     if job.course_number:
         detail_lines.append(shorten(job.course_number, width=42, placeholder="..."))
