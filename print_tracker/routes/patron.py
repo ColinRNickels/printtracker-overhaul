@@ -11,6 +11,7 @@ from flask import (
     render_template,
     request,
     send_file,
+    session,
     url_for,
 )
 
@@ -23,6 +24,7 @@ from ..models import (
     PrintJob,
 )
 from ..services.label_printer import build_qr_image, create_and_print_label
+from ..services.library_hours import check_is_open
 from ..services.qr_links import build_staff_completion_url
 from ..services.runtime_settings import get_operational_settings
 from ..services.sheets_sync import sync_job_to_google_sheet
@@ -137,7 +139,33 @@ def register():
         "pi_name": "",
     }
 
+    # --- Library hours check ---
+    # Staff who are already logged in may bypass the hours restriction so
+    # they can assist patrons or register test prints outside open hours.
+    staff_override = session.get("staff_authenticated", False)
+    makerspace_is_open = True
+    closed_message = ""
+    if current_app.config.get("LIBRARY_HOURS_ENFORCE", True) and not staff_override:
+        makerspace_is_open, closed_message = check_is_open(
+            library_short_name=current_app.config["LIBRARY_HOURS_LIBRARY_SHORT_NAME"],
+            service_short_name=current_app.config["LIBRARY_HOURS_SERVICE_SHORT_NAME"],
+            post_close_buffer_minutes=current_app.config[
+                "LIBRARY_HOURS_POST_CLOSE_BUFFER_MINUTES"
+            ],
+        )
+
     if request.method == "POST":
+        if not makerspace_is_open:
+            flash(closed_message or "The Makerspace is currently closed.", "error")
+            return render_template(
+                "patron_register.html",
+                form=form,
+                category_options=CATEGORY_OPTIONS,
+                ncsu_domain=NCSU_EMAIL_DOMAIN,
+                makerspace_is_open=makerspace_is_open,
+                closed_message=closed_message,
+            )
+
         form.update({key: request.form.get(key, "").strip() for key in form})
         form["file_name"] = _normalize_single_line(form["file_name"])
         if form["file_name"] and not form["file_name"].lower().endswith(".stl"):
@@ -191,6 +219,8 @@ def register():
                 form=form,
                 category_options=CATEGORY_OPTIONS,
                 ncsu_domain=NCSU_EMAIL_DOMAIN,
+                makerspace_is_open=makerspace_is_open,
+                closed_message=closed_message,
             )
 
         full_name = f"{form['first_name']} {form['last_name']}".strip()
@@ -234,6 +264,8 @@ def register():
         form=form,
         category_options=CATEGORY_OPTIONS,
         ncsu_domain=NCSU_EMAIL_DOMAIN,
+        makerspace_is_open=makerspace_is_open,
+        closed_message=closed_message,
     )
 
 

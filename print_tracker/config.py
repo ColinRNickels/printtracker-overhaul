@@ -133,6 +133,23 @@ class Config:
     DEFAULT_PRINTER_NAME = os.environ.get("DEFAULT_PRINTER_NAME", "Makerspace")
     SITE_ID = os.environ.get("SITE_ID", "").strip().upper()
 
+    # Library hours enforcement
+    # When True, patrons cannot submit jobs outside open hours (+ buffer).
+    # Set to False to disable the check entirely (e.g. for local testing).
+    LIBRARY_HOURS_ENFORCE = _env_flag("LIBRARY_HOURS_ENFORCE", default=True)
+    # Match the API's library_short_name field (e.g. "hill" or "hunt").
+    LIBRARY_HOURS_LIBRARY_SHORT_NAME = os.environ.get(
+        "LIBRARY_HOURS_LIBRARY_SHORT_NAME", "hill"
+    ).strip()
+    # Match the API's service_short_name field (e.g. "makerspace" or "maker-studio").
+    LIBRARY_HOURS_SERVICE_SHORT_NAME = os.environ.get(
+        "LIBRARY_HOURS_SERVICE_SHORT_NAME", "makerspace"
+    ).strip()
+    # Minutes after closing time during which job submission is still allowed.
+    LIBRARY_HOURS_POST_CLOSE_BUFFER_MINUTES = _env_int(
+        "LIBRARY_HOURS_POST_CLOSE_BUFFER_MINUTES", default=10, minimum=0
+    )
+
     # go.ncsu.edu short-link settings (updated on tunnel restart)
     GO_NCSU_API_TOKEN = os.environ.get("GO_NCSU_API_TOKEN", "").strip()
     GO_NCSU_LINK_SLUG = os.environ.get(

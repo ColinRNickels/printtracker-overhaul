@@ -1117,3 +1117,24 @@ nav a.nav-active {
     color: var(--warning);
     font-weight: 600;
 }
+
+/* ================================================================
+   Library hours — closed alert
+   ================================================================ */
+.alert-closed {
+    background: #fff3cd;
+    border: 1px solid #ffc107;
+    border-left: 4px solid #ffc107;
+    border-radius: 6px;
+    color: #664d03;
+    font-size: 1rem;
+    line-height: 1.5;
+    margin-bottom: 1.25rem;
+    padding: 0.9rem 1rem;
+}
+
+.alert-closed strong {
+    display: block;
+    font-size: 1.1rem;
+    margin-bottom: 0.25rem;
+}

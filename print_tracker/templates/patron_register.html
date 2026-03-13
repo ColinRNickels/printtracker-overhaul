@@ -3,9 +3,18 @@
 {% block content %}
 <section class="panel kiosk-compact">
     <h2>Print in Progress</h2>
-    <p class="lead-line">Use your Unity ID or full NCSU email, then choose the project type to reveal any extra required fields.</p>
 
-    <form method="post" class="kiosk-compact-form" id="kioskForm">
+    {% if not makerspace_is_open %}
+    <div class="alert alert-closed" role="alert">
+        <strong>We're closed right now.</strong>
+        {% if closed_message %}{{ closed_message }}{% endif %}
+        Please come back during open hours to register your print.
+    </div>
+    {% else %}
+    <p class="lead-line">Use your Unity ID or full NCSU email, then choose the project type to reveal any extra required fields.</p>
+    {% endif %}
+
+    <form method="post" class="kiosk-compact-form" id="kioskForm"{% if not makerspace_is_open %} aria-disabled="true"{% endif %}>
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-grid two-col compact-row">
             <label>
@@ -65,7 +74,7 @@
         </div>
 
         <div class="form-actions compact-actions">
-            <button type="submit" id="kioskSubmitBtn">Print Label</button>
+            <button type="submit" id="kioskSubmitBtn"{% if not makerspace_is_open %} disabled{% endif %}>Print Label</button>
         </div>
     </form>
 </section>
