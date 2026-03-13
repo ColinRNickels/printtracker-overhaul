@@ -429,6 +429,11 @@ def create_and_print_label(
         result["printed"] = True
         result["message"] = process.stdout.strip() or "Label sent to printer queue."
         log.info("CUPS print succeeded: %s", result["message"])
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()
+        detail = stderr if stderr else str(exc)
+        result["message"] = f"Printing failed: {detail}"
+        log.error("CUPS print failed (exit %s): %s", exc.returncode, detail)
     except Exception as exc:  # noqa: BLE001
         result["message"] = f"Printing failed: {exc}"
         log.error("CUPS print failed: %s", exc)

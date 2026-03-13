@@ -12,8 +12,8 @@ REPO_URL="https://github.com/ColinRNickels/printtracker.git"
 DEPLOY_DIR=""
 PORT="5000"
 PRINT_MODE="cups"
-PRINTER_QUEUE="QL-800"
-LABEL_MEDIA="62x100mm"
+PRINTER_QUEUE=""
+LABEL_MEDIA="Custom.62x100mm"
 STAFF_PASSWORD=""
 SITE_ID=""
 LOCATION_NAME="Makerspace"
@@ -520,15 +520,21 @@ if [[ "${UPDATE_MODE}" -eq 1 ]]; then
   _cur_media="$(get_env_value "${ENV_FILE}" "LABEL_CUPS_MEDIA")"
   _cur_queue="$(get_env_value "${ENV_FILE}" "LABEL_PRINTER_QUEUE")"
   _env_migrated=0
-  if [[ "${_cur_media}" == "DK-1202" ]]; then
-    set_env_value "${ENV_FILE}" "LABEL_CUPS_MEDIA" "62x100mm"
-    tui_success "Migrated LABEL_CUPS_MEDIA: DK-1202 → 62x100mm"
+  if [[ "${_cur_media}" == "DK-1202" || "${_cur_media}" == "62x100mm" ]]; then
+    set_env_value "${ENV_FILE}" "LABEL_CUPS_MEDIA" "Custom.62x100mm"
+    tui_success "Migrated LABEL_CUPS_MEDIA: ${_cur_media} → Custom.62x100mm"
     _env_migrated=1
   fi
-  if [[ "${_cur_queue}" == "QL800" ]]; then
-    set_env_value "${ENV_FILE}" "LABEL_PRINTER_QUEUE" "QL-800"
-    tui_success "Migrated LABEL_PRINTER_QUEUE: QL800 → QL-800"
-    _env_migrated=1
+  if [[ "${_cur_queue}" == "QL800" || "${_cur_queue}" == "QL-800" ]]; then
+    # Check if the current queue actually exists in CUPS; auto-detect if not
+    if command -v lpstat &>/dev/null && ! lpstat -a "${_cur_queue}" &>/dev/null; then
+      _detected="$(lpstat -a 2>/dev/null | awk '{print $1}' | grep -i -m1 'ql' || true)"
+      if [[ -n "${_detected}" ]]; then
+        set_env_value "${ENV_FILE}" "LABEL_PRINTER_QUEUE" "${_detected}"
+        tui_success "Migrated LABEL_PRINTER_QUEUE: ${_cur_queue} → ${_detected} (auto-detected)"
+        _env_migrated=1
+      fi
+    fi
   fi
   if [[ "${_env_migrated}" -eq 0 ]]; then
     tui_success ".env settings are current."
@@ -599,8 +605,8 @@ if [[ -f "${ENV_FILE}" ]]; then
 
   _maybe PORT                "PORT"                          "5000"
   _maybe PRINT_MODE          "LABEL_PRINT_MODE"              "cups"
-  _maybe PRINTER_QUEUE       "LABEL_PRINTER_QUEUE"           "QL-800"
-  _maybe LABEL_MEDIA         "LABEL_CUPS_MEDIA"              "62x100mm"
+  _maybe PRINTER_QUEUE       "LABEL_PRINTER_QUEUE"           ""
+  _maybe LABEL_MEDIA         "LABEL_CUPS_MEDIA"              "Custom.62x100mm"
   _maybe LOCATION_NAME       "DEFAULT_PRINTER_NAME"          "Makerspace"
   _maybe SITE_ID             "SITE_ID"                       ""
   _maybe GO_NCSU_API_TOKEN   "GO_NCSU_API_TOKEN"             ""
@@ -738,15 +744,25 @@ LOGO
   printf '\n'
 
   if [[ "${PRINT_MODE}" == "cups" ]]; then
+    # Auto-detect Brother QL printer queue if not already set
+    if [[ -z "${PRINTER_QUEUE}" ]] && command -v lpstat &>/dev/null; then
+      _detected_queue="$(lpstat -a 2>/dev/null | awk '{print $1}' | grep -i -m1 'ql' || true)"
+      if [[ -n "${_detected_queue}" ]]; then
+        PRINTER_QUEUE="${_detected_queue}"
+        tui_success "Auto-detected CUPS printer: ${PRINTER_QUEUE}"
+      fi
+    fi
+    [[ -z "${PRINTER_QUEUE}" ]] && PRINTER_QUEUE="QL-800"
+
     tui_hint "CUPS queue name — the name of your printer in the Linux print system."
     tui_explain "  If you've already set up the printer, you can see its name by running:"
-    tui_explain "    lpstat -e"
-    tui_explain "  The default 'QL-800' matches a standard Brother QL-800."
+    tui_explain "    lpstat -a"
+    tui_explain "  The auto-detected or default value is shown in brackets."
     PRINTER_QUEUE="$(prompt_default "CUPS queue name" "${PRINTER_QUEUE}")"
     printf '\n'
 
     tui_hint "Page size — tells the printer what size labels are loaded."
-    tui_explain "  62x100mm = standard Brother DK-1202 address labels (62 mm × 100 mm)."
+    tui_explain "  Custom.62x100mm = standard Brother DK-1202 address labels (62 mm × 100 mm)."
     tui_explain "  Only change this if you're using a different label stock."
     LABEL_MEDIA="$(prompt_default "CUPS page size" "${LABEL_MEDIA}")"
     printf '\n'
@@ -1150,6 +1166,7 @@ tui_success "Python packages installed."
 
 # ── 4. App directories & logo ─────────────────────────────────────────────
 mkdir -p "${INSTANCE_DIR}" "${LABEL_DIR}" "${ASSETS_DIR}"
+run_root chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${INSTANCE_DIR}" "${LABEL_DIR}" "${ASSETS_DIR}"
 if [[ -n "${LOGO_SOURCE}" && -f "${LOGO_SOURCE}" ]]; then
   cp "${LOGO_SOURCE}" "${LOGO_DEST}"
   tui_success "Logo copied to ${LOGO_DEST}"
@@ -1174,7 +1191,7 @@ set_env_value "${ENV_FILE}" "LABEL_STOCK" "DK1202"
 set_env_value "${ENV_FILE}" "LABEL_DPI" "300"
 set_env_value "${ENV_FILE}" "LABEL_ORIENTATION" "landscape"
 set_env_value "${ENV_FILE}" "LABEL_QR_PAYLOAD_MODE" "url"
-set_env_value "${ENV_FILE}" "LABEL_QR_SIZE_INCH" "0.5"
+set_env_value "${ENV_FILE}" "LABEL_QR_SIZE_INCH" "1.0"
 set_env_value "${ENV_FILE}" "LABEL_CUPS_MEDIA" "${LABEL_MEDIA}"
 set_env_value "${ENV_FILE}" "LABEL_SAVE_LABEL_FILES" "true"
 set_env_value "${ENV_FILE}" "LABEL_BRAND_TEXT" "NC State University Libraries Makerspace"
@@ -1217,6 +1234,8 @@ fi
 if [[ "${SKIP_DB_INIT}" -eq 0 ]]; then
   tui_progress "Initializing database"
   (cd "${APP_DIR}" && "${VENV_DIR}/bin/flask" --app run.py init-db)
+  # Ensure the DB file and WAL/SHM journals are writable by the service user.
+  run_root chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${INSTANCE_DIR}"
   tui_success "Database ready."
 else
   tui_warn "Skipping DB init (--skip-db-init)."
@@ -1229,18 +1248,52 @@ if [[ "${SKIP_CUPS}" -eq 0 ]]; then
   tui_success "CUPS enabled."
 
   tui_progress "Checking for connected printers"
+  _usb_detected=0
   if command -v lsusb >/dev/null 2>&1; then
     if lsusb | grep -iq brother; then
       tui_success "Brother USB device detected."
+      _usb_detected=1
     else
       tui_warn "No Brother USB device found — is the printer plugged in and powered on?"
     fi
   fi
-  if command -v lpinfo >/dev/null 2>&1; then
-    if lpinfo -v 2>/dev/null | grep -Eiq 'usb.*brother|usb.*ql'; then
-      tui_success "CUPS sees a compatible USB print backend."
+
+  # Auto-add the printer to CUPS if USB backend is visible but no queue exists
+  if [[ "${_usb_detected}" -eq 1 ]] && command -v lpinfo >/dev/null 2>&1; then
+    _usb_uri="$(lpinfo -v 2>/dev/null | grep -Ei 'usb.*brother|usb.*ql' | awk '{print $2}' | head -1 || true)"
+    if [[ -n "${_usb_uri}" ]]; then
+      tui_success "CUPS sees a compatible USB print backend: ${_usb_uri}"
+      # Check if a queue already exists for this printer
+      _existing_queue="$(lpstat -a 2>/dev/null | awk '{print $1}' | grep -i -m1 'ql' || true)"
+      if [[ -z "${_existing_queue}" ]]; then
+        tui_progress "Adding printer '${PRINTER_QUEUE}' to CUPS"
+        # Find the best available PPD/driver for the QL series
+        _ppd="$(lpinfo -m 2>/dev/null | grep -Ei 'ql.?800|brother.*ql' | head -1 | awk '{print $1}' || true)"
+        if [[ -n "${_ppd}" ]]; then
+          run_root lpadmin -p "${PRINTER_QUEUE}" -v "${_usb_uri}" -m "${_ppd}" -E 2>/dev/null \
+            && tui_success "Printer '${PRINTER_QUEUE}' added to CUPS with driver ${_ppd}." \
+            || tui_warn "lpadmin failed — you may need to add the printer manually via CUPS web UI."
+        else
+          # No specific driver found; use a generic one
+          run_root lpadmin -p "${PRINTER_QUEUE}" -v "${_usb_uri}" -m "everywhere" -E 2>/dev/null \
+            && tui_success "Printer '${PRINTER_QUEUE}' added to CUPS with generic driver." \
+            || tui_warn "lpadmin failed — you may need to add the printer manually via CUPS web UI."
+        fi
+        # Enable and accept jobs on the new queue
+        run_root cupsenable "${PRINTER_QUEUE}" 2>/dev/null || true
+        run_root cupsaccept "${PRINTER_QUEUE}" 2>/dev/null || true
+      else
+        tui_success "CUPS queue '${_existing_queue}' already exists."
+        if [[ "${_existing_queue}" != "${PRINTER_QUEUE}" ]]; then
+          PRINTER_QUEUE="${_existing_queue}"
+          set_env_value "${ENV_FILE}" "LABEL_PRINTER_QUEUE" "${PRINTER_QUEUE}"
+          tui_success "Updated LABEL_PRINTER_QUEUE to '${PRINTER_QUEUE}' to match existing queue."
+        fi
+      fi
     else
       tui_warn "No QL USB backend listed yet — the printer may need manual CUPS setup."
+      tui_explain "  Try: sudo lpinfo -v        (list backends)"
+      tui_explain "  Then: sudo lpadmin -p ${PRINTER_QUEUE} -v <URI> -m everywhere -E"
     fi
   fi
 

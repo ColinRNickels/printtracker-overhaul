@@ -117,23 +117,6 @@
             input.addEventListener("change", sync);
         }
 
-        form.addEventListener("focusin", (event) => {
-            const target = event.target;
-            if (!(target instanceof HTMLElement)) {
-                return;
-            }
-            if (!target.matches("input,select,textarea")) {
-                return;
-            }
-            const compactViewport = window.matchMedia("(max-height: 620px) and (max-width: 620px)").matches;
-            if (!compactViewport) {
-                return;
-            }
-            setTimeout(() => {
-                target.scrollIntoView({ behavior: "smooth", block: "center" });
-            }, 140);
-        });
-
         sync();
 
         /* Strip @ncsu.edu suffix live so the visible field stays tidy */

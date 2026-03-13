@@ -61,13 +61,13 @@ class Config:
         "LABEL_ORIENTATION", "landscape"
     )  # landscape | portrait
     LABEL_QR_PAYLOAD_MODE = os.environ.get("LABEL_QR_PAYLOAD_MODE", "url")  # id | url
-    LABEL_QR_SIZE_INCH = float(os.environ.get("LABEL_QR_SIZE_INCH", "0.5"))
+    LABEL_QR_SIZE_INCH = float(os.environ.get("LABEL_QR_SIZE_INCH", "1.0"))
     LABEL_BRAND_TEXT = os.environ.get(
         "LABEL_BRAND_TEXT",
         "NC State University Libraries Makerspace",
     )
     LABEL_BRAND_LOGO_PATH = os.environ.get("LABEL_BRAND_LOGO_PATH", "")
-    LABEL_CUPS_MEDIA = os.environ.get("LABEL_CUPS_MEDIA", "62x100mm")
+    LABEL_CUPS_MEDIA = os.environ.get("LABEL_CUPS_MEDIA", "Custom.62x100mm")
     LABEL_CUPS_EXTRA_OPTIONS = os.environ.get("LABEL_CUPS_EXTRA_OPTIONS", "")
     LABEL_SAVE_LABEL_FILES = os.environ.get(
         "LABEL_SAVE_LABEL_FILES", "true"

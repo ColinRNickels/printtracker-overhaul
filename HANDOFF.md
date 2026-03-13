@@ -178,7 +178,7 @@ Reference: `.env.example` (36 variables).
 | `LABEL_DPI` | `300` | |
 | `LABEL_ORIENTATION` | `landscape` | |
 | `LABEL_QR_PAYLOAD_MODE` | `url` | `url` (full link) or `id` (bare code) |
-| `LABEL_QR_SIZE_INCH` | `0.5` | |
+| `LABEL_QR_SIZE_INCH` | `1.0` | |
 | `LABEL_BRAND_TEXT` | `NC State University Libraries Makerspace` | |
 | `LABEL_BRAND_LOGO_PATH` | (empty) | Optional PNG; auto-converted to 1-bit |
 | `LABEL_CUPS_MEDIA` | `DK-1202` | |
