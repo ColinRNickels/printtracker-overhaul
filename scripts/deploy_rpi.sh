@@ -395,6 +395,9 @@ while [[ $# -gt 0 ]]; do
     --go-ncsu-link-slug)     GO_NCSU_LINK_SLUG="$2";          shift 2 ;;
     --site-id)               SITE_ID="$2";                    shift 2 ;;
     --location-name)         LOCATION_NAME="$2";              shift 2 ;;
+    --library-short-name)    LIBRARY_HOURS_LIBRARY_SHORT_NAME="$2";  shift 2 ;;
+    --service-short-name)    LIBRARY_HOURS_SERVICE_SHORT_NAME="$2";  shift 2 ;;
+    --no-library-hours)      LIBRARY_HOURS_ENFORCE_FLAG=false;        shift ;;
     --logo-source)           LOGO_SOURCE="$2";                shift 2 ;;
     --skip-apt)              SKIP_APT=1;                      shift ;;
     --skip-cups)             SKIP_CUPS=1;                     shift ;;
@@ -818,6 +821,22 @@ LOGO
   printf '\n'
 
   tui_success "Location: ${LOCATION_NAME}  |  Print IDs will start with ${SITE_ID}-"
+
+  # Auto-derive library hours short names from the location name so most
+  # deployments need no extra input.  Operators can override via --non-interactive
+  # flags or by editing .env after deploy.
+  if [[ -z "${LIBRARY_HOURS_LIBRARY_SHORT_NAME:-}" ]]; then
+    case "${LOCATION_NAME,,}" in
+      *hunt*)   LIBRARY_HOURS_LIBRARY_SHORT_NAME="hunt" ;;
+      *hill*|*) LIBRARY_HOURS_LIBRARY_SHORT_NAME="hill" ;;
+    esac
+  fi
+  if [[ -z "${LIBRARY_HOURS_SERVICE_SHORT_NAME:-}" ]]; then
+    case "${LOCATION_NAME,,}" in
+      *studio*|*hunt*) LIBRARY_HOURS_SERVICE_SHORT_NAME="maker-studio" ;;
+      *)               LIBRARY_HOURS_SERVICE_SHORT_NAME="makerspace"   ;;
+    esac
+  fi
 
   # ╭───────────────────────────────────────────────────────────────────────╮
   # │  Step 5 — Cloudflare Tunnel                                          │
@@ -1345,6 +1364,12 @@ set_env_value "${ENV_FILE}" "LABEL_BRAND_TEXT" "NC State University Libraries Ma
 set_env_value "${ENV_FILE}" "DEFAULT_PRINTER_NAME" "${LOCATION_NAME}"
 set_env_value "${ENV_FILE}" "PORT" "${PORT}"
 [[ -n "${SITE_ID}" ]] && set_env_value "${ENV_FILE}" "SITE_ID" "${SITE_ID}"
+
+# Library hours — write defaults; operator can edit .env later to adjust.
+set_env_value "${ENV_FILE}" "LIBRARY_HOURS_ENFORCE"                   "${LIBRARY_HOURS_ENFORCE_FLAG:-true}"
+set_env_value "${ENV_FILE}" "LIBRARY_HOURS_LIBRARY_SHORT_NAME"        "${LIBRARY_HOURS_LIBRARY_SHORT_NAME:-hill}"
+set_env_value "${ENV_FILE}" "LIBRARY_HOURS_SERVICE_SHORT_NAME"        "${LIBRARY_HOURS_SERVICE_SHORT_NAME:-makerspace}"
+set_env_value "${ENV_FILE}" "LIBRARY_HOURS_POST_CLOSE_BUFFER_MINUTES" "10"
 
 EXISTING_GO_TOKEN="$(get_env_value "${ENV_FILE}" "GO_NCSU_API_TOKEN")"
 if [[ -n "${GO_NCSU_API_TOKEN}" ]]; then
