@@ -246,7 +246,7 @@ generates `.env`, creates systemd units, optionally runs OAuth flow.
 
 Named tunnel setup (Step 5 / Section 9):
 - Prompts for tunnel credentials JSON file and hostname
-- Auto-detects creds in `/etc/cloudflared/` or `~/.cloudflared/`
+- Auto-detects creds on USB transfer drive (`/media/`), `/etc/cloudflared/`, or `~/.cloudflared/`
 - Copies creds to `/etc/cloudflared/tunnel-creds.json`
 - Writes `/etc/cloudflared/config.yml` with extracted TunnelID
 - Runs `cloudflared service install` and verifies the service

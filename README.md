@@ -296,16 +296,17 @@ cloudflared tunnel route dns hunt-print hunt-print.howcanthis.be
 
 ### 4.4 Deploy to the Pi
 
-Copy the credentials JSON to the Pi (e.g., via `scp`), then run the
-deploy script:
+Copy the credentials JSON onto the USB transfer drive, plug it into the
+Pi, then run the deploy script:
 
 ```bash
 sudo ./scripts/deploy_rpi.sh \
-  --tunnel-creds-file /home/pi/.cloudflared/<TUNNEL_ID>.json \
+  --tunnel-creds-file /media/pi/TRANSFER/tunnel-creds.json \
   --tunnel-hostname hill-print.howcanthis.be
 ```
 
-Or let the interactive wizard prompt for these values in Step 5.
+Or let the interactive wizard prompt for these values in Step 5 — it
+auto-detects credential files on the transfer drive.
 
 The deploy script:
 1. Copies the creds file to `/etc/cloudflared/tunnel-creds.json`

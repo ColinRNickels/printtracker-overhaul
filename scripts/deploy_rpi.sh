@@ -836,10 +836,10 @@ LOGO
   tui_hint "2. Run: cloudflared tunnel login"
   tui_hint "3. Run: cloudflared tunnel create <tunnel-name>"
   tui_hint "4. Run: cloudflared tunnel route dns <tunnel-name> <hostname>"
-  tui_hint "5. Copy the credentials JSON to this Pi (scp)."
+  tui_hint "5. Copy the credentials JSON to the USB transfer drive."
   printf '\n'
-  tui_explain "When to say YES:  you've completed the steps above and have"
-  tui_explain "                  the tunnel credentials file on this Pi."
+  tui_explain "When to say YES:  you've completed the steps above and the"
+  tui_explain "                  credentials JSON is on the transfer drive."
   tui_explain "When to say NO:   local network access only, or not ready yet."
   printf '\n'
   tui_hint "You can set this up later by re-running the deploy script."
@@ -861,26 +861,29 @@ LOGO
     tui_rule '·'
     tui_explain "  Path to the tunnel credentials JSON file."
     printf '\n'
-    tui_explain "  This was created when you ran 'cloudflared tunnel create'."
-    tui_explain "  It's a JSON file named like <tunnel-uuid>.json."
-    tui_explain "  You should have copied it to this Pi via scp."
+    tui_explain "  This was created when you ran 'cloudflared tunnel create'"
+    tui_explain "  on your laptop. It's a JSON file named <tunnel-uuid>.json"
+    tui_explain "  in ~/.cloudflared/. You should have copied it onto the USB"
+    tui_explain "  transfer drive — look for it at /media/*/tunnel-creds.json"
+    tui_explain "  or /media/*/<tunnel-uuid>.json."
     if [[ -z "${TUNNEL_CREDS_FILE}" ]]; then
       # Try to auto-detect an existing creds file
       _existing_creds=""
       if [[ -f /etc/cloudflared/tunnel-creds.json ]]; then
         _existing_creds="/etc/cloudflared/tunnel-creds.json"
       else
-        # Look in ~/.cloudflared/ for credential JSONs (cert.pem is not .json)
+        # Look on USB transfer drive first, then ~/.cloudflared/
         _creds_candidates=()
         while IFS= read -r -d '' _f; do
           _creds_candidates+=("$_f")
-        done < <(find "${HOME}/.cloudflared" -maxdepth 1 -name '*.json' -print0 2>/dev/null)
+        done < <(find /media -maxdepth 3 -name '*.json' -print0 2>/dev/null; \
+                 find "${HOME}/.cloudflared" -maxdepth 1 -name '*.json' -print0 2>/dev/null)
         if [[ ${#_creds_candidates[@]} -eq 1 ]]; then
           _existing_creds="${_creds_candidates[0]}"
         elif [[ ${#_creds_candidates[@]} -gt 1 ]]; then
-          tui_warn "Multiple credential files found in ~/.cloudflared/:"
+          tui_warn "Multiple credential files found:"
           for _cf in "${_creds_candidates[@]}"; do
-            tui_hint "  $(basename "$_cf")"
+            tui_hint "  $_cf"
           done
           tui_explain "  Enter the full path to the correct one below."
         fi
@@ -1233,6 +1236,45 @@ if [[ "${SKIP_APT}" -eq 0 ]]; then
   fi
 else
   tui_warn "Skipping apt packages (--skip-apt)."
+fi
+
+# ── 1b. GNOME Keyring (suppress "choose password for new keyring" popup) ──
+# On a fresh Pi, the first app that tries to store a secret (usually a
+# browser) triggers a dialog asking the user to create a new keyring.
+# Pre-creating a default keyring with an empty password silences this.
+_kr_dir="/home/${SERVICE_USER}/.local/share/keyrings"
+if [[ ! -f "${_kr_dir}/default-keyring.keyring" ]] \
+   && [[ ! -f "${_kr_dir}/Default_keyring.keyring" ]] \
+   && [[ ! -f "${_kr_dir}/login.keyring" ]]; then
+  tui_progress "Creating default GNOME keyring (empty password)"
+  run_root apt-get install -y -qq gnome-keyring libsecret-1-0 2>/dev/null || true
+  run_root mkdir -p "${_kr_dir}"
+  # Use keyring's own CLI via dbus to initialise with an empty password.
+  # If dbus is not available (headless SSH), fall back to writing the
+  # keyring config that tells gnome-keyring-daemon to unlock automatically.
+  if sudo -u "${SERVICE_USER}" \
+       dbus-run-session -- bash -c \
+       'echo -n "" | gnome-keyring-daemon --unlock >/dev/null 2>&1' 2>/dev/null; then
+    tui_success "Default keyring created."
+  else
+    # Fallback: write the autostart config so the keyring daemon starts
+    # unlocked on the desktop session.
+    _autostart_dir="/home/${SERVICE_USER}/.config/autostart"
+    run_root mkdir -p "${_autostart_dir}"
+    cat <<'KEYRING_DESKTOP' | run_root tee "${_autostart_dir}/gnome-keyring-unlock.desktop" >/dev/null
+[Desktop Entry]
+Type=Application
+Name=Unlock GNOME Keyring
+Exec=bash -c 'echo -n "" | gnome-keyring-daemon --unlock'
+X-GNOME-Autostart-enabled=true
+Hidden=false
+KEYRING_DESKTOP
+    run_root chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "/home/${SERVICE_USER}/.config"
+    tui_success "Keyring auto-unlock configured for desktop login."
+  fi
+  run_root chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${_kr_dir}"
+else
+  tui_success "GNOME keyring already exists."
 fi
 
 # ── 2. Linux user groups ──────────────────────────────────────────────────
