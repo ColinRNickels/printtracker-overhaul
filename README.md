@@ -59,8 +59,9 @@ Student phone (campus Wi-Fi)
         │  HTTPS
         ▼
 ┌──────────────────────────────┐
-│  Cloudflare Tunnel (free)    │
-│  makerspace-print.domain.com │
+│  Cloudflare Named Tunnel     │
+│  hill-print.howcanthis.be    │
+│  hunt-print.howcanthis.be    │
 └──────────┬───────────────────┘
            │  localhost:5000
            ▼
@@ -73,9 +74,11 @@ Student phone (campus Wi-Fi)
 └──────────────────────────┘
 ```
 
-Each makerspace location runs its own Pi. A free Cloudflare Tunnel gives
-each Pi a stable public HTTPS URL that students can reach from campus Wi-Fi
-— no IT firewall changes, no DNS requests, no server provisioning.
+Each makerspace location runs its own Pi with a named Cloudflare tunnel
+and a permanent hostname under `howcanthis.be`. Students on campus Wi-Fi
+reach the Pi via HTTPS — no IT firewall changes, no DNS requests, no
+server provisioning. The tunnel URL never changes, so QR code posters and
+go.ncsu.edu short links only need to be set up once.
 
 ### Production (future — server + Pi print relays)
 
@@ -183,9 +186,12 @@ live and printing.
 - `.env` creation/update with all settings
 - Database initialization
 - CUPS printer queue auto-creation (if a Brother USB printer is detected)
-- systemd services (`print-tracker` + optional `cloudflared-quick`)
+- systemd services (`print-tracker` + optional `cloudflared` named tunnel)
 - File ownership (so the service user can write to the DB and labels dir)
-- Optional Cloudflare quick tunnel for public HTTPS access
+- Optional Cloudflare named tunnel for public HTTPS access (creds file +
+  hostname → writes `/etc/cloudflared/config.yml`, runs
+  `cloudflared service install`)
+- Cleans up legacy `cloudflared-quick` service if present
 - Optional go.ncsu.edu short link
 - Optional Google OAuth setup (Gmail notifications + Sheets sync)
 
@@ -221,6 +227,11 @@ sudo ./scripts/deploy_rpi.sh --non-interactive --staff-password 'YourPassword'
 # Development/testing without a printer
 sudo ./scripts/deploy_rpi.sh --print-mode mock
 
+# With named tunnel (creds file + hostname)
+sudo ./scripts/deploy_rpi.sh \
+  --tunnel-creds-file ~/.cloudflared/<TUNNEL_ID>.json \
+  --tunnel-hostname hill-print.howcanthis.be
+
 # Full Google OAuth setup
 sudo ./scripts/deploy_rpi.sh \
   --setup-google-oauth \
@@ -233,136 +244,89 @@ sudo ./scripts/deploy_rpi.sh \
 
 ## 4) Cloudflare Tunnel Setup
 
-Cloudflare Tunnel gives the Pi a public HTTPS URL so students on campus
-Wi-Fi can reach the registration form on their phones. Free tier, no
-domain purchase required.
+Cloudflare named tunnels give each Pi a permanent public HTTPS URL so
+students on campus Wi-Fi can reach the registration form on their phones.
+Free tier. Domain: `howcanthis.be` (Cloudflare-managed DNS).
+
+Current hostnames:
+- `hill-print.howcanthis.be` → Hill Library Pi
+- `hunt-print.howcanthis.be` → Hunt Library Pi
 
 ### 4.1 Quick test (no account needed)
 
-Run one command to get a temporary public URL:
+For development or demos, a temporary quick tunnel works without any
+account or domain:
 
 ```bash
 cloudflared tunnel --url http://localhost:5000
 ```
 
 It prints something like `https://random-words-here.trycloudflare.com`.
-That URL is live immediately with automatic HTTPS. The URL changes on
-every restart — fine for a demo, not for production.
+The URL changes on every restart — fine for testing, not for production.
 
-### 4.2 Permanent tunnel (free Cloudflare account)
+### 4.2 Prerequisites (one-time, on your laptop)
 
-#### Create account
+1. **Cloudflare account** — https://dash.cloudflare.com/sign-up
+2. **Domain added to Cloudflare** — `howcanthis.be` with Cloudflare
+   nameservers set at the registrar
+3. **cloudflared installed** — `brew install cloudflared` (macOS) or
+   download the `.deb` for the Pi
+4. **Authenticate** — `cloudflared tunnel login` (opens browser, saves
+   `~/.cloudflared/cert.pem`)
 
-1. Go to https://dash.cloudflare.com/sign-up
-2. Enter email + password, verify email
-3. No domain, payment, or website required
-
-#### Install cloudflared on the Pi
-
-```bash
-# Download the latest cloudflared .deb for arm64 (Raspberry Pi)
-curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.deb \
-  -o /tmp/cloudflared.deb
-sudo dpkg -i /tmp/cloudflared.deb
-rm /tmp/cloudflared.deb
-```
-
-#### Authenticate
+### 4.3 Create a named tunnel
 
 ```bash
-cloudflared tunnel login
-```
+# Create tunnel (generates credentials JSON)
+cloudflared tunnel create hill-print
 
-This prints a URL. Open it **on your laptop** (not the Pi), log in to
-Cloudflare, and authorize. The Pi receives a certificate at
-`~/.cloudflared/cert.pem`. This is a one-time step.
-
-#### Create the tunnel
-
-```bash
-cloudflared tunnel create print-tracker
+# Route a hostname to it (creates CNAME in Cloudflare DNS)
+cloudflared tunnel route dns hill-print hill-print.howcanthis.be
 ```
 
 Note the tunnel ID (e.g., `abcd-1234-efgh-5678`). A credentials file is
 created at `~/.cloudflared/<TUNNEL_ID>.json`.
 
-#### Configure
-
-Create `~/.cloudflared/config.yml`:
-
-```yaml
-tunnel: <TUNNEL_ID>
-credentials-file: /home/pi/.cloudflared/<TUNNEL_ID>.json
-
-ingress:
-  - service: http://localhost:5000
-```
-
-Replace the tunnel ID and path with your actual values.
-
-#### Run as a system service
+Repeat for each location:
 
 ```bash
-sudo cloudflared service install
-sudo systemctl enable --now cloudflared
+cloudflared tunnel create hunt-print
+cloudflared tunnel route dns hunt-print hunt-print.howcanthis.be
 ```
+
+### 4.4 Deploy to the Pi
+
+Copy the credentials JSON to the Pi (e.g., via `scp`), then run the
+deploy script:
+
+```bash
+sudo ./scripts/deploy_rpi.sh \
+  --tunnel-creds-file /home/pi/.cloudflared/<TUNNEL_ID>.json \
+  --tunnel-hostname hill-print.howcanthis.be
+```
+
+Or let the interactive wizard prompt for these values in Step 5.
+
+The deploy script:
+1. Copies the creds file to `/etc/cloudflared/tunnel-creds.json`
+2. Extracts the tunnel ID from the JSON
+3. Writes `/etc/cloudflared/config.yml`
+4. Runs `cloudflared service install`
+5. Verifies the `cloudflared` systemd service is active
+6. Sets `KIOSK_BASE_URL=https://<hostname>` in `.env`
 
 The tunnel starts on boot and reconnects automatically after network
-interruptions.
+interruptions. The URL never changes.
 
-#### Your stable URL
+### 4.5 Cloudflare Access (optional)
 
-Without a custom domain, the Pi is reachable at:
+To restrict access to NCSU networks:
 
-```
-https://<TUNNEL_ID>.cfargotunnel.com
-```
-
-This URL is permanent and HTTPS is automatic.
-
-#### Update the app config
-
-Set `KIOSK_BASE_URL` in `.env` to the tunnel URL:
-
-```
-KIOSK_BASE_URL=https://<TUNNEL_ID>.cfargotunnel.com
-```
-
-Restart the app:
-
-```bash
-sudo systemctl restart print-tracker
-```
-
-QR codes on labels now encode the public tunnel URL — scannable by staff
-from any network.
-
-### 4.3 Multiple locations
-
-Each makerspace gets its own Pi with its own tunnel. Create a separate
-tunnel for each:
-
-```bash
-# On Makerspace Pi
-cloudflared tunnel create makerspace-print
-
-# On Maker Studio Pi
-cloudflared tunnel create maker-studio-print
-```
-
-Each gets its own stable URL. Post a QR code poster at each location
-linking to its registration form.
-
-### 4.4 Optional: custom domain
-
-If you later get a domain (e.g., `lib-print.ncsu.edu`), add a DNS CNAME
-in Cloudflare pointing to the tunnel:
-
-```bash
-cloudflared tunnel route dns print-tracker makerspace-print.yourdomain.com
-```
-
-No Pi reconfiguration needed — just update `KIOSK_BASE_URL`.
+1. Go to Cloudflare Zero Trust → Access → Applications
+2. Add an application for `*.howcanthis.be`
+3. Create a policy (e.g., allow NCSU IP ranges, or use email OTP)
+4. The `/patron/register` path can be excluded from the policy so
+   students don't need to authenticate
 
 ---
 
@@ -453,7 +417,8 @@ The app creates the worksheet and headers automatically on first sync.
 | `DATABASE_URL` | `sqlite:///instance/print_tracker.db` | SQLite database path |
 | `STAFF_PASSWORD` | `staffpw` | Staff dashboard password — change in production |
 | `DEFAULT_PRINTER_NAME` | `Makerspace` | Display name for the printer location |
-| `KIOSK_BASE_URL` | `http://localhost:5000` | Public base URL for QR codes on labels |
+| `KIOSK_BASE_URL` | `http://localhost:5000` | Public base URL for QR codes (auto-set to `https://<hostname>` by deploy script when tunnel is configured) |
+| `TUNNEL_HOSTNAME` | *(empty)* | Permanent tunnel hostname (e.g., `hill-print.howcanthis.be`) |
 
 ### Label printing
 
@@ -522,8 +487,9 @@ up. Enable saving and reprint.
 
 ### QR scan opens wrong or unreachable URL
 
-`KIOSK_BASE_URL` doesn't match the tunnel URL, or the tunnel is down.
-Verify with `sudo systemctl status cloudflared`.
+`KIOSK_BASE_URL` in `.env` doesn't match the tunnel hostname. Should be
+`https://<hostname>` (e.g., `https://hill-print.howcanthis.be`). Verify
+the tunnel is running with `sudo systemctl status cloudflared`.
 
 ### `sqlite3.OperationalError: unable to open database file`
 
@@ -570,6 +536,7 @@ journalctl -u print-tracker -f
 sudo systemctl status cloudflared --no-pager
 sudo systemctl restart cloudflared
 journalctl -u cloudflared -f
+cat /etc/cloudflared/config.yml
 
 # CUPS
 lpstat -e                 # list queues
@@ -584,8 +551,8 @@ lp -d QL800 /usr/share/cups/data/testprint   # test print
 ### Current: Pi-only MVP
 
 Each location runs its own Pi with the full Flask app, SQLite, CUPS, and
-a Cloudflare Tunnel for public HTTPS access. Google Sheets is the
-shared external record. This requires zero IT involvement.
+a named Cloudflare Tunnel for permanent public HTTPS access. Google
+Sheets is the shared external record. This requires zero IT involvement.
 
 ### Future: Server + Pi print relays
 

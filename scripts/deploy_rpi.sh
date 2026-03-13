@@ -31,6 +31,8 @@ GOOGLE_GMAIL_SENDER="library_makerspace@ncsu.edu"
 GOOGLE_SPREADSHEET_ID=""
 GOOGLE_WORKSHEET="PrintJobs"
 SETUP_TUNNEL=-1
+TUNNEL_CREDS_FILE=""
+TUNNEL_HOSTNAME=""
 SETUP_GOLINK=-1
 GO_NCSU_API_TOKEN=""
 GO_NCSU_LINK_SLUG=""
@@ -45,6 +47,7 @@ if [[ -t 1 ]] && tput colors &>/dev/null && [[ "$(tput colors)" -ge 8 ]]; then
   C_GREEN="\033[1;32m"
   C_YELLOW="\033[1;33m"
   C_CYAN="\033[1;36m"
+  C_BG_CYAN="\033[46m"
   C_WHITE="\033[1;37m"
   SYM_CHECK="✔"
   SYM_CROSS="✘"
@@ -54,7 +57,7 @@ if [[ -t 1 ]] && tput colors &>/dev/null && [[ "$(tput colors)" -ge 8 ]]; then
   SYM_GEAR="⚙"
 else
   C_RESET="" C_BOLD="" C_DIM="" C_RED="" C_GREEN="" C_YELLOW="" C_CYAN=""
-  C_WHITE=""
+  C_BG_CYAN="" C_WHITE=""
   SYM_CHECK="[OK]" SYM_CROSS="[X]" SYM_ARROW=">" SYM_BULLET="*"
   SYM_WARN="[!]" SYM_GEAR="[*]"
 fi
@@ -170,8 +173,10 @@ Options:
   --google-spreadsheet-id ID|URL
                            Spreadsheet ID or full Google Sheets URL (optional).
   --google-worksheet NAME  Worksheet tab name (default: PrintJobs).
-  --setup-tunnel           Set up a Cloudflare quick tunnel (free, no domain needed).
+  --setup-tunnel           Set up a Cloudflare named tunnel.
   --no-tunnel              Skip Cloudflare Tunnel setup.
+  --tunnel-creds-file PATH Path to tunnel credentials JSON from 'cloudflared tunnel create'.
+  --tunnel-hostname HOST   Public hostname for this tunnel (e.g. hill-print.example.com).
   --setup-golink           Update a go.ncsu.edu short link during deploy.
   --no-golink              Skip go.ncsu.edu short link setup.
   --go-ncsu-api-token TOKEN
@@ -382,6 +387,8 @@ while [[ $# -gt 0 ]]; do
     --google-worksheet)      GOOGLE_WORKSHEET="$2";           shift 2 ;;
     --setup-tunnel)          SETUP_TUNNEL=1;                  shift ;;
     --no-tunnel)             SETUP_TUNNEL=0;                  shift ;;
+    --tunnel-creds-file)     TUNNEL_CREDS_FILE="$2";          shift 2 ;;
+    --tunnel-hostname)       TUNNEL_HOSTNAME="$2";            shift 2 ;;
     --setup-golink)          SETUP_GOLINK=1;                  shift ;;
     --no-golink)             SETUP_GOLINK=0;                  shift ;;
     --go-ncsu-api-token)     GO_NCSU_API_TOKEN="$2";          shift 2 ;;
@@ -401,6 +408,12 @@ done
 # Extract spreadsheet ID from a full URL if one was passed via CLI flag.
 if [[ "${GOOGLE_SPREADSHEET_ID}" == *"docs.google.com/spreadsheets"* ]]; then
   GOOGLE_SPREADSHEET_ID="$(printf '%s' "${GOOGLE_SPREADSHEET_ID}" | sed -n 's|.*spreadsheets/d/\([^/]*\).*|\1|p')"
+fi
+
+# Auto-enable tunnel setup when credentials file and hostname are both
+# provided via CLI flags (so --setup-tunnel doesn't need to be explicit).
+if [[ "${SETUP_TUNNEL}" -lt 0 && -n "${TUNNEL_CREDS_FILE}" && -n "${TUNNEL_HOSTNAME}" ]]; then
+  SETUP_TUNNEL=1
 fi
 
 # ── Resolve deploy directory ───────────────────────────────────────────────
@@ -423,7 +436,8 @@ if [[ "${DELETE_MODE}" -eq 1 ]]; then
   tui_banner "Uninstall Print Tracker"
   printf '\n'
   tui_warn "This will permanently remove:"
-  tui_hint "systemd services (${SERVICE_NAME}, cloudflared-quick)"
+  tui_hint "systemd services (${SERVICE_NAME}, cloudflared)"
+  tui_hint "Cloudflare tunnel configuration (/etc/cloudflared/)"
   tui_hint "Application directory (${DEPLOY_DIR})"
   tui_hint ".env, database, labels, OAuth tokens — everything"
   printf '\n'
@@ -440,7 +454,7 @@ if [[ "${DELETE_MODE}" -eq 1 ]]; then
 
   printf '\n'
   # Stop and remove services
-  for svc in "${SERVICE_NAME}" cloudflared-quick; do
+  for svc in "${SERVICE_NAME}" cloudflared; do
     if [[ -f "/etc/systemd/system/${svc}.service" ]]; then
       tui_progress "Stopping ${svc}"
       run_root systemctl stop "${svc}" 2>/dev/null || true
@@ -450,6 +464,13 @@ if [[ "${DELETE_MODE}" -eq 1 ]]; then
     fi
   done
   run_root systemctl daemon-reload 2>/dev/null || true
+
+  # Remove Cloudflare tunnel configuration
+  if [[ -d /etc/cloudflared ]]; then
+    tui_progress "Removing /etc/cloudflared"
+    run_root rm -rf /etc/cloudflared
+    tui_success "Deleted /etc/cloudflared"
+  fi
 
   # Remove the application directory
   if [[ -d "${DEPLOY_DIR}" ]]; then
@@ -563,10 +584,10 @@ if [[ "${UPDATE_MODE}" -eq 1 ]]; then
     tui_warn "${SERVICE_NAME}.service not found — run a full deploy to create it."
   fi
 
-  if [[ -f "/etc/systemd/system/cloudflared-quick.service" ]]; then
-    tui_progress "Restarting cloudflared-quick"
-    run_root systemctl restart cloudflared-quick
-    tui_success "cloudflared-quick restarted (new tunnel URL will be detected)."
+  if [[ -f "/etc/systemd/system/cloudflared.service" ]]; then
+    tui_progress "Restarting cloudflared"
+    run_root systemctl restart cloudflared
+    tui_success "cloudflared restarted."
   fi
 
   printf '\n'
@@ -611,6 +632,7 @@ if [[ -f "${ENV_FILE}" ]]; then
   _maybe SITE_ID             "SITE_ID"                       ""
   _maybe GO_NCSU_API_TOKEN   "GO_NCSU_API_TOKEN"             ""
   _maybe GO_NCSU_LINK_SLUG   "GO_NCSU_LINK_SLUG"             ""
+  _maybe TUNNEL_HOSTNAME     "TUNNEL_HOSTNAME"               ""
   _maybe GOOGLE_GMAIL_SENDER "GOOGLE_GMAIL_SENDER"           "library_makerspace@ncsu.edu"
   _maybe GOOGLE_SPREADSHEET_ID "GOOGLE_SHEETS_SPREADSHEET_ID" ""
   _maybe GOOGLE_WORKSHEET    "GOOGLE_SHEETS_WORKSHEET"       "PrintJobs"
@@ -623,7 +645,7 @@ if [[ -f "${ENV_FILE}" ]]; then
 
   # Pre-fill tunnel / golink decisions based on whether they were configured.
   if [[ "${SETUP_TUNNEL}" -lt 0 ]]; then
-    if [[ -f "/etc/systemd/system/cloudflared-quick.service" ]]; then
+    if [[ -f /etc/cloudflared/config.yml ]] || [[ -f "/etc/systemd/system/cloudflared.service" ]]; then
       SETUP_TUNNEL=1
     fi
   fi
@@ -800,34 +822,108 @@ LOGO
   # ╭───────────────────────────────────────────────────────────────────────╮
   # │  Step 5 — Cloudflare Tunnel                                          │
   # ╰───────────────────────────────────────────────────────────────────────╯
-  tui_step_header "Internet Access (Cloudflare Tunnel)"
+  tui_step_header "Internet Access (Cloudflare Named Tunnel)"
 
   tui_explain "Right now the app is reachable only on the local network at:"
   tui_explain "  http://<this Pi's IP address>:${PORT}"
   printf '\n'
-  tui_explain "A Cloudflare tunnel makes it accessible from the public internet"
-  tui_explain "using a URL like https://random-words.trycloudflare.com"
+  tui_explain "A Cloudflare named tunnel gives this Pi a permanent public URL"
+  tui_explain "like https://hill-print.yourdomain.com — it never changes, even"
+  tui_explain "after reboots."
   printf '\n'
-  tui_explain "How it works:"
-  tui_hint "Free — no Cloudflare account or domain name required."
-  tui_hint "No router or firewall changes needed."
-  tui_hint "The URL changes when the tunnel restarts, but the app can update it."
+  tui_explain "Prerequisites (done on your laptop, not this Pi):"
+  tui_hint "1. Add your domain to Cloudflare and update nameservers."
+  tui_hint "2. Run: cloudflared tunnel login"
+  tui_hint "3. Run: cloudflared tunnel create <tunnel-name>"
+  tui_hint "4. Run: cloudflared tunnel route dns <tunnel-name> <hostname>"
+  tui_hint "5. Copy the credentials JSON to this Pi (scp)."
   printf '\n'
-  tui_explain "When to say YES:  staff or users need to access the app from"
-  tui_explain "                  campus Wi-Fi, remotely, or outside your LAN."
-  tui_explain "When to say NO:   the Pi and all users are on the same network."
+  tui_explain "When to say YES:  you've completed the steps above and have"
+  tui_explain "                  the tunnel credentials file on this Pi."
+  tui_explain "When to say NO:   local network access only, or not ready yet."
   printf '\n'
   tui_hint "You can set this up later by re-running the deploy script."
 
   if [[ "${SETUP_TUNNEL}" -lt 0 ]]; then
-    if prompt_yes_no "Set up a Cloudflare quick tunnel" "y"; then
+    if prompt_yes_no "Set up a Cloudflare named tunnel" "y"; then
       SETUP_TUNNEL=1
-      printf '\n'
-      tui_success "Tunnel will be configured during installation."
     else
       SETUP_TUNNEL=0
       printf '\n'
       tui_success "Skipping tunnel — local network access only."
+    fi
+  fi
+
+  if [[ "${SETUP_TUNNEL}" -eq 1 ]]; then
+    printf '\n'
+
+    # -- Credentials file --
+    tui_rule '·'
+    tui_explain "  Path to the tunnel credentials JSON file."
+    printf '\n'
+    tui_explain "  This was created when you ran 'cloudflared tunnel create'."
+    tui_explain "  It's a JSON file named like <tunnel-uuid>.json."
+    tui_explain "  You should have copied it to this Pi via scp."
+    if [[ -z "${TUNNEL_CREDS_FILE}" ]]; then
+      # Try to auto-detect an existing creds file
+      _existing_creds=""
+      if [[ -f /etc/cloudflared/tunnel-creds.json ]]; then
+        _existing_creds="/etc/cloudflared/tunnel-creds.json"
+      else
+        # Look in ~/.cloudflared/ for credential JSONs (cert.pem is not .json)
+        _creds_candidates=()
+        while IFS= read -r -d '' _f; do
+          _creds_candidates+=("$_f")
+        done < <(find "${HOME}/.cloudflared" -maxdepth 1 -name '*.json' -print0 2>/dev/null)
+        if [[ ${#_creds_candidates[@]} -eq 1 ]]; then
+          _existing_creds="${_creds_candidates[0]}"
+        elif [[ ${#_creds_candidates[@]} -gt 1 ]]; then
+          tui_warn "Multiple credential files found in ~/.cloudflared/:"
+          for _cf in "${_creds_candidates[@]}"; do
+            tui_hint "  $(basename "$_cf")"
+          done
+          tui_explain "  Enter the full path to the correct one below."
+        fi
+      fi
+      TUNNEL_CREDS_FILE="$(prompt_default "Credentials JSON path" "${_existing_creds}")"
+    else
+      tui_success "Credentials file: ${TUNNEL_CREDS_FILE}"
+    fi
+    printf '\n'
+
+    # Validate the creds file exists
+    while [[ ! -f "${TUNNEL_CREDS_FILE}" ]]; do
+      tui_warn "File not found: ${TUNNEL_CREDS_FILE}"
+      if prompt_yes_no "Try a different path" "y"; then
+        TUNNEL_CREDS_FILE="$(prompt_default "Credentials JSON path" "")"
+      else
+        SETUP_TUNNEL=0
+        tui_warn "Tunnel setup skipped."
+        break
+      fi
+    done
+
+    if [[ "${SETUP_TUNNEL}" -eq 1 ]]; then
+      # -- Hostname --
+      tui_rule '·'
+      tui_explain "  Public hostname for this location."
+      printf '\n'
+      tui_explain "  This is the DNS name you routed to this tunnel, e.g.:"
+      tui_explain "    hill-print.yourdomain.com"
+      tui_explain "    hunt-print.yourdomain.com"
+      if [[ -z "${TUNNEL_HOSTNAME}" ]]; then
+        TUNNEL_HOSTNAME="$(prompt_default "Tunnel hostname" "")"
+      else
+        tui_success "Hostname: ${TUNNEL_HOSTNAME}"
+      fi
+      printf '\n'
+
+      if [[ -z "${TUNNEL_HOSTNAME}" ]]; then
+        tui_warn "No hostname provided — tunnel setup skipped."
+        SETUP_TUNNEL=0
+      else
+        tui_success "Tunnel: https://${TUNNEL_HOSTNAME} → localhost:${PORT}"
+      fi
     fi
   fi
 
@@ -837,11 +933,11 @@ LOGO
   tui_step_header "go.ncsu.edu Short Link"
 
   tui_explain "If you have a go.ncsu.edu short link, this step will update it to"
-  tui_explain "point to your app's tunnel URL. For example:"
+  tui_explain "point to your app's permanent tunnel URL. For example:"
   printf '\n'
-  tui_explain "    go.ncsu.edu/makerspace-print  →  https://<your-tunnel-url>"
+  tui_explain "    go.ncsu.edu/makerspace-print  →  https://hill-print.yourdomain.com"
   printf '\n'
-  tui_explain "The short link stays the same even when the tunnel URL changes."
+  tui_explain "With a named tunnel this only needs to be done once — the URL never changes."
   tui_explain "Useful for printed signs, label QR codes, and sharing with users."
   printf '\n'
   tui_hint "You should have already created the short link at go.ncsu.edu."
@@ -1013,7 +1109,7 @@ LOGO
   tui_field "Location name" "${LOCATION_NAME}"
   tui_field "Site ID prefix" "${SITE_ID}"
   if [[ "${SETUP_TUNNEL}" -eq 1 ]]; then
-    tui_field "Cloudflare tunnel" "Yes"
+    tui_field "Cloudflare tunnel" "https://${TUNNEL_HOSTNAME}"
   else
     tui_field "Cloudflare tunnel" "No"
   fi
@@ -1087,7 +1183,14 @@ fi
 
 HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 [[ -z "${HOST_IP}" ]] && HOST_IP="localhost"
-KIOSK_BASE_URL="http://${HOST_IP}:${PORT}"
+
+# Use the permanent tunnel hostname for KIOSK_BASE_URL when a named tunnel
+# is configured; otherwise fall back to the local IP.
+if [[ "${SETUP_TUNNEL}" -eq 1 && -n "${TUNNEL_HOSTNAME}" ]]; then
+  KIOSK_BASE_URL="https://${TUNNEL_HOSTNAME}"
+else
+  KIOSK_BASE_URL="http://${HOST_IP}:${PORT}"
+fi
 
 SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 
@@ -1340,64 +1443,68 @@ else
   tui_warn "Skipping CUPS setup (--skip-cups)."
 fi
 
-# ── 9. Cloudflare tunnel ─────────────────────────────────────────────────
+# ── 9. Cloudflare named tunnel ────────────────────────────────────────────
 TUNNEL_CONFIGURED=0
 [[ "${SETUP_TUNNEL}" -lt 0 ]] && SETUP_TUNNEL=0
 if [[ "${SETUP_TUNNEL}" -eq 1 ]]; then
   if ! command -v cloudflared >/dev/null 2>&1; then
     tui_warn "cloudflared not installed — tunnel setup skipped."
+  elif [[ ! -f "${TUNNEL_CREDS_FILE}" ]]; then
+    tui_warn "Credentials file not found: ${TUNNEL_CREDS_FILE} — tunnel setup skipped."
+  elif [[ -z "${TUNNEL_HOSTNAME}" ]]; then
+    tui_warn "No tunnel hostname set — tunnel setup skipped."
   else
-    tui_progress "Setting up Cloudflare quick tunnel"
-    run_root systemctl stop cloudflared 2>/dev/null || true
-    run_root systemctl disable cloudflared 2>/dev/null || true
-    run_root cloudflared service uninstall 2>/dev/null || true
+    tui_progress "Setting up Cloudflare named tunnel"
+
+    # Stop any existing tunnel services (quick or named)
     run_root systemctl stop cloudflared-quick 2>/dev/null || true
+    run_root systemctl disable cloudflared-quick 2>/dev/null || true
+    run_root rm -f /etc/systemd/system/cloudflared-quick.service
+    run_root systemctl stop cloudflared 2>/dev/null || true
+    run_root cloudflared service uninstall 2>/dev/null || true
 
-    TUNNEL_SCRIPT="${APP_DIR}/scripts/start_tunnel.sh"
-    chmod +x "${TUNNEL_SCRIPT}"
+    # Install credentials
+    run_root mkdir -p /etc/cloudflared
+    run_root cp "${TUNNEL_CREDS_FILE}" /etc/cloudflared/tunnel-creds.json
+    run_root chmod 600 /etc/cloudflared/tunnel-creds.json
 
-    run_root tee /etc/systemd/system/cloudflared-quick.service >/dev/null <<CFDEOF
-[Unit]
-Description=Cloudflare Quick Tunnel for Print Tracker
-After=network-online.target ${SERVICE_NAME}.service
-Wants=network-online.target
-StartLimitIntervalSec=300
-StartLimitBurst=5
-
-[Service]
-Environment=APP_PORT=${PORT}
-Environment=ENV_FILE=${ENV_FILE}
-Environment=SERVICE_NAME=${SERVICE_NAME}
-Environment=GO_NCSU_API_TOKEN=${GO_NCSU_API_TOKEN}
-Environment=GO_NCSU_LINK_SLUG=${GO_NCSU_LINK_SLUG}
-ExecStart=${TUNNEL_SCRIPT}
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-CFDEOF
-    run_root systemctl daemon-reload
-    run_root systemctl enable --now cloudflared-quick
-
-    TUNNEL_CONFIGURED=1
-    tui_success "Cloudflare tunnel service started."
-
-    # Wait for the tunnel URL to appear in the journal (up to 30s).
-    tui_progress "Waiting for tunnel URL"
-    _tw=0
-    while [[ ${_tw} -lt 30 ]]; do
-      TUNNEL_URL="$(journalctl -u cloudflared-quick --no-pager -n 100 2>/dev/null \
-        | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1 || true)"
-      [[ -n "${TUNNEL_URL}" ]] && break
-      sleep 2
-      _tw=$((_tw + 2))
-    done
-    if [[ -n "${TUNNEL_URL}" ]]; then
-      tui_success "Tunnel URL: ${TUNNEL_URL}"
-    else
-      tui_warn "Tunnel URL not detected yet — start_tunnel.sh will update the golink when it appears."
+    # Extract tunnel ID from the credentials JSON
+    TUNNEL_ID="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['TunnelID'])" "${TUNNEL_CREDS_FILE}" 2>/dev/null || true)"
+    if [[ -z "${TUNNEL_ID}" ]]; then
+      # Fallback: try the filename (cloudflared names creds files <UUID>.json)
+      TUNNEL_ID="$(basename "${TUNNEL_CREDS_FILE}" .json)"
     fi
+
+    # Write config.yml
+    run_root tee /etc/cloudflared/config.yml >/dev/null <<CFGEOF
+tunnel: ${TUNNEL_ID}
+credentials-file: /etc/cloudflared/tunnel-creds.json
+
+ingress:
+  - hostname: ${TUNNEL_HOSTNAME}
+    service: http://localhost:${PORT}
+  - service: http_status:404
+CFGEOF
+
+    tui_success "Tunnel config written to /etc/cloudflared/config.yml"
+
+    # Install and enable cloudflared as a systemd service
+    run_root cloudflared service install 2>/dev/null || true
+    run_root systemctl daemon-reload
+    run_root systemctl enable --now cloudflared
+
+    # Verify it started
+    if systemctl is-active --quiet cloudflared 2>/dev/null; then
+      TUNNEL_CONFIGURED=1
+      tui_success "Cloudflare named tunnel is running → https://${TUNNEL_HOSTNAME}"
+    else
+      tui_warn "cloudflared service installed but may not be active yet."
+      tui_explain "  Check with: sudo systemctl status cloudflared"
+      TUNNEL_CONFIGURED=1  # config is still in place
+    fi
+
+    # Save hostname in .env for reference
+    set_env_value "${ENV_FILE}" "TUNNEL_HOSTNAME" "${TUNNEL_HOSTNAME}"
   fi
 fi
 
@@ -1405,17 +1512,9 @@ fi
 GOLINK_CONFIGURED=0
 [[ "${SETUP_GOLINK}" -lt 0 ]] && SETUP_GOLINK=0
 if [[ "${SETUP_GOLINK}" -eq 1 && -n "${GO_NCSU_API_TOKEN}" && -n "${GO_NCSU_LINK_SLUG}" ]]; then
-  # Determine the target URL for the golink
-  GOLINK_TARGET=""
-  if [[ "${TUNNEL_CONFIGURED}" -eq 1 && -n "${TUNNEL_URL:-}" ]]; then
-    GOLINK_TARGET="${TUNNEL_URL}"
-  elif [[ "${TUNNEL_CONFIGURED}" -eq 1 ]]; then
-    tui_warn "Skipping golink update — tunnel URL not available yet."
-    tui_explain "start_tunnel.sh will update the golink automatically when the tunnel connects."
-    GOLINK_TARGET=""
-  else
-    GOLINK_TARGET="${KIOSK_BASE_URL}"
-  fi
+  # With named tunnels the KIOSK_BASE_URL is permanent (https://hostname),
+  # so we can always use it as the golink target.
+  GOLINK_TARGET="${KIOSK_BASE_URL}"
 
   if [[ -n "${GOLINK_TARGET}" ]]; then
     tui_progress "Updating go.ncsu.edu/${GO_NCSU_LINK_SLUG} → ${GOLINK_TARGET}"
@@ -1503,8 +1602,8 @@ printf '\n'
 # ── Live URL ──────────────────────────────────────────────────────────────
 printf '  %b%s Your app is live!%b\n\n' "${C_GREEN}" "${SYM_CHECK}" "${C_RESET}"
 printf '     Local URL:   %bhttp://%s:%s/patron/register%b\n' "${C_BOLD}" "${HOST_IP}" "${PORT}" "${C_RESET}"
-if [[ "${TUNNEL_CONFIGURED}" -eq 1 && -n "${TUNNEL_URL:-}" ]]; then
-  printf '     Public URL:  %b%s%b\n' "${C_BOLD}" "${TUNNEL_URL}" "${C_RESET}"
+if [[ "${TUNNEL_CONFIGURED}" -eq 1 ]]; then
+  printf '     Public URL:  %bhttps://%s%b\n' "${C_BOLD}" "${TUNNEL_HOSTNAME}" "${C_RESET}"
 fi
 if [[ "${GOLINK_CONFIGURED}" -eq 1 ]]; then
   printf '     Short link:  %bgo.ncsu.edu/%s%b\n' "${C_BOLD}" "${GO_NCSU_LINK_SLUG}" "${C_RESET}"
@@ -1534,15 +1633,11 @@ fi
 # ── Tunnel extra info ─────────────────────────────────────────────────────
 if [[ "${TUNNEL_CONFIGURED}" -eq 1 ]]; then
   tui_rule '─'
-  printf '\n  %bCloudflare Tunnel%b\n\n' "${C_BOLD}" "${C_RESET}"
-  if [[ -n "${TUNNEL_URL:-}" ]]; then
-    printf '  Public URL: %b%s%b\n\n' "${C_BOLD}" "${TUNNEL_URL}" "${C_RESET}"
-    tui_explain "  NOTE: This URL changes every time the tunnel restarts."
-    tui_explain "  If you configure go.ncsu.edu, the app updates the short link automatically."
-  else
-    tui_warn "Tunnel is running but URL hasn't appeared yet. Check with:"
-    tui_explain "    sudo journalctl -u cloudflared-quick -n 20 | grep trycloudflare"
-  fi
+  printf '\n  %bCloudflare Named Tunnel%b\n\n' "${C_BOLD}" "${C_RESET}"
+  printf '  Public URL: %bhttps://%s%b\n\n' "${C_BOLD}" "${TUNNEL_HOSTNAME}" "${C_RESET}"
+  tui_explain "  This is a permanent URL that survives reboots and tunnel restarts."
+  tui_explain "  Config: /etc/cloudflared/config.yml"
+  tui_explain "  Credentials: /etc/cloudflared/tunnel-creds.json"
   printf '\n'
 fi
 
@@ -1574,8 +1669,7 @@ if [[ "${GOLINK_CONFIGURED}" -eq 1 ]]; then
   tui_rule '─'
   printf '\n  %bgo.ncsu.edu Short Link%b\n\n' "${C_BOLD}" "${C_RESET}"
   printf '  Short URL: %bgo.ncsu.edu/%s%b\n\n' "${C_BOLD}" "${GO_NCSU_LINK_SLUG}" "${C_RESET}"
-  tui_explain "  The tunnel URL changes when the tunnel restarts, but the go.ncsu.edu"
-  tui_explain "  short link is updated automatically by the tunnel startup script."
+  tui_explain "  Points to the permanent tunnel URL. No auto-update needed."
   printf '\n'
 elif [[ "${SETUP_GOLINK}" -ne 1 ]]; then
   tui_rule '─'
@@ -1602,8 +1696,9 @@ printf '  %b%-35s%b %s\n' "${C_DIM}" "Stop the app" "${C_RESET}" "sudo systemctl
 printf '  %b%-35s%b %s\n' "${C_DIM}" "Check app status" "${C_RESET}" "sudo systemctl status ${SERVICE_NAME}"
 printf '  %b%-35s%b %s\n' "${C_DIM}" "Edit configuration" "${C_RESET}" "nano ${ENV_FILE}"
 if [[ "${TUNNEL_CONFIGURED}" -eq 1 ]]; then
-  printf '  %b%-35s%b %s\n' "${C_DIM}" "View tunnel logs" "${C_RESET}" "sudo journalctl -u cloudflared-quick -f"
-  printf '  %b%-35s%b %s\n' "${C_DIM}" "Restart tunnel" "${C_RESET}" "sudo systemctl restart cloudflared-quick"
+  printf '  %b%-35s%b %s\n' "${C_DIM}" "View tunnel logs" "${C_RESET}" "sudo journalctl -u cloudflared -f"
+  printf '  %b%-35s%b %s\n' "${C_DIM}" "Restart tunnel" "${C_RESET}" "sudo systemctl restart cloudflared"
+  printf '  %b%-35s%b %s\n' "${C_DIM}" "Tunnel config" "${C_RESET}" "cat /etc/cloudflared/config.yml"
 fi
 if [[ "${GOLINK_CONFIGURED}" -eq 1 ]]; then
   printf '  %b%-35s%b %s\n' "${C_DIM}" "Update golink URL" "${C_RESET}" "${APP_DIR}/scripts/update_golink.sh"

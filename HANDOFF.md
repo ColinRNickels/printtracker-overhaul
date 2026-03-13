@@ -2,7 +2,7 @@
 
 ## Snapshot
 
-- Date: 2026-03-06
+- Date: 2026-03-13
 - Repo: `/Users/crnickel/Dev/Print Tracker`
 - Remote: `https://github.com/ColinRNickels/printtracker.git`
 - Python: 3.12+ with venv at `.venv/`
@@ -16,10 +16,10 @@ complete jobs by scanning the label QR from their phones.
 
 Data lives in SQLite (fast local operations, WAL mode) with Google Sheets
 as the durable external record. Email notifications go through the Gmail
-API (with SMTP fallback). A Cloudflare quick tunnel provides public HTTPS
-so students on campus Wi-Fi can reach the Pi without IT involvement.
-go.ncsu.edu short links give each location a stable, memorable URL that
-auto-updates when the tunnel URL changes.
+API (with SMTP fallback). A Cloudflare named tunnel provides public HTTPS
+with a permanent hostname so students on campus Wi-Fi can reach the Pi
+without IT involvement. go.ncsu.edu short links give each location a
+stable, memorable URL.
 
 ## Project Goals
 
@@ -55,7 +55,8 @@ Student phone (campus Wi-Fi)
         ▼
 ┌──────────────────────────────┐
 │  go.ncsu.edu/makerspace-…   │  ← stable short link
-│  → Cloudflare quick tunnel   │
+│  → hill-print.howcanthis.be  │  ← Cloudflare named tunnel
+│     hunt-print.howcanthis.be │
 └──────────┬───────────────────┘
            │  localhost:5000
            ▼
@@ -68,14 +69,17 @@ Student phone (campus Wi-Fi)
 └──────────────────────────────┘
 ```
 
-Each makerspace location runs its own Pi + tunnel. The campus network has
-client isolation enabled, so direct Pi-to-phone routing is not possible
-without the tunnel.
+Each makerspace location runs its own Pi + named tunnel. The campus
+network has client isolation enabled, so direct Pi-to-phone routing is
+not possible without the tunnel.
+
+Domain: `howcanthis.be` (Cloudflare-managed DNS)
+- `hill-print.howcanthis.be` → Hill Library Pi
+- `hunt-print.howcanthis.be` → Hunt Library Pi
 
 Systemd services:
 - `print-tracker` — gunicorn on `0.0.0.0:5000`
-- `cloudflared-quick` — runs `start_tunnel.sh` (starts tunnel, detects
-  URL, updates `.env`, patches go.ncsu.edu, restarts app)
+- `cloudflared` — named tunnel via `/etc/cloudflared/config.yml`
 
 ### Future: server + Pi print relays
 
@@ -196,6 +200,7 @@ Reference: `.env.example` (36 variables).
 | `GOOGLE_SHEETS_WORKSHEET` | `PrintJobs` | |
 | `DEFAULT_PRINTER_NAME` | `Makerspace` | Location name in Sheets + labels |
 | `SITE_ID` | (empty) | 2–4 letter prefix for label codes (e.g. `HL`, `HU`; default `PT`) |
+| `TUNNEL_HOSTNAME` | (empty) | Permanent tunnel hostname (e.g. `hill-print.howcanthis.be`) |
 | `GO_NCSU_API_TOKEN` | | API token for go.ncsu.edu |
 | `GO_NCSU_LINK_SLUG` | `makerspace-print-label` | Short link slug |
 
@@ -220,38 +225,52 @@ Session cookies: `Secure`, `HttpOnly`, `SameSite=Lax`.
 ./scripts/deploy_rpi.sh
 ```
 
-Interactive TUI wizard (~1 200 lines) with 8 steps:
+Interactive TUI wizard (~1 700 lines) with 8 steps:
 
 1. Staff password (prompted with confirmation)
 2. Linux service user/group/port
 3. Label printer mode (`cups`/`mock`) + CUPS queue + media
 4. Location name & Site ID
-5. Cloudflare tunnel (optional — installs `cloudflared`, creates systemd service)
+5. Cloudflare named tunnel (optional — creds file path + hostname)
 6. go.ncsu.edu short link (optional)
 7. Google OAuth (optional — runs bootstrap flow)
 8. Review & confirm
 
 Non-interactive mode: `./scripts/deploy_rpi.sh --non-interactive`  
-Also accepts `--print-mode`, `--no-ap`, `--no-kiosk-autostart`, etc.
+Also accepts `--print-mode`, `--tunnel-creds-file PATH`,
+`--tunnel-hostname HOST`, `--no-ap`, `--no-kiosk-autostart`, etc.
 
 Installs: apt packages (`cups`, `printer-driver-ptouch`, `avahi-daemon`,
 `usbutils`, `cloudflared`), Python venv + requirements + gunicorn,
 generates `.env`, creates systemd units, optionally runs OAuth flow.
 
+Named tunnel setup (Step 5 / Section 9):
+- Prompts for tunnel credentials JSON file and hostname
+- Auto-detects creds in `/etc/cloudflared/` or `~/.cloudflared/`
+- Copies creds to `/etc/cloudflared/tunnel-creds.json`
+- Writes `/etc/cloudflared/config.yml` with extracted TunnelID
+- Runs `cloudflared service install` and verifies the service
+- Cleans up any legacy `cloudflared-quick` service from MVP
+
 ### Cloudflare Tunnel
 
-Managed by `scripts/start_tunnel.sh` (run as a `cloudflared-quick`
-systemd service):
+Named tunnels with permanent hostnames (replaces the MVP quick-tunnel
+approach). Each Pi has:
 
-1. Starts a Cloudflare quick tunnel in the background
-2. Waits up to 30 s for the tunnel URL to appear
-3. Updates `KIOSK_BASE_URL` in `.env`
-4. PATCHes the go.ncsu.edu short link to the new URL
-5. Restarts `print-tracker` so it picks up the new URL
-6. Keeps `cloudflared` running in the foreground (for systemd)
+- `/etc/cloudflared/config.yml` — tunnel ID, credentials path, ingress
+  rules routing the hostname to `http://localhost:5000`
+- `/etc/cloudflared/tunnel-creds.json` — tunnel credentials JSON
+- `cloudflared` systemd service (installed via `cloudflared service install`)
+
+The tunnel URL never changes, so `KIOSK_BASE_URL` in `.env` is set once
+at deploy time (`https://<hostname>`) and go.ncsu.edu only needs to be
+updated once.
+
+Legacy scripts (kept for dev/testing, no longer used in production):
+- `scripts/start_tunnel.sh` — quick tunnel manager (was `cloudflared-quick` service)
+- `scripts/get_tunnel_url.sh` — prints current URL from journalctl / .env
 
 Helper scripts:
-- `scripts/get_tunnel_url.sh` — prints current URL (journalctl → .env fallback)
 - `scripts/update_golink.sh` — manually update go.ncsu.edu link
 
 ### Google OAuth bootstrap
@@ -276,9 +295,9 @@ Copy the printed env values into the Pi's `.env`.
    location name; `SITE_ID` prefixes label codes per site; `location`
    column on `PrintJob` and in Sheets. MVP: one Pi per location.
 
-3. **go.ncsu.edu short links** — Quick tunnels get a new random URL on
-   each restart; `start_tunnel.sh` auto-patches the go link so the
-   QR-code poster URL (`go.ncsu.edu/makerspace-print-label`) stays stable.
+3. **go.ncsu.edu short links** — Named tunnels have permanent URLs, so
+   the go link only needs to be set once. Legacy quick-tunnel workflow
+   (`start_tunnel.sh`) auto-patched the go link on each restart.
 
 4. **SQLite WAL mode** — Enabled per-connection via SQLAlchemy event
    listener for better concurrent read performance.
@@ -323,10 +342,13 @@ Copy the printed env values into the Pi's `.env`.
   to skip.
 - **Single-Pi reliability**: No redundancy. If the Pi dies, prints are
   tracked only in Google Sheets until a replacement is set up. Keep an
-  SD card image backup.
+  SD card image backup. Consider protecting SD cards with a read-only
+  overlay or using a USB SSD.
 - **OAuth token expiry**: Google refresh tokens can expire if unused for
   6 months or if the OAuth app is in "testing" mode (7-day expiry).
   Publish the app or use a Workspace account for long-lived tokens.
+- **No health endpoint**: Consider adding a `/health` route and
+  UptimeRobot (or similar) monitoring for each tunnel hostname.
 
 ## Quick Validation Checklist
 
@@ -345,8 +367,9 @@ After pulling latest code:
 ## Suggested Next Agent First Steps
 
 1. Run end-to-end test on real Pi hardware:
-   - AP join from iPhone/iPad
-   - QR scan/login/complete flow
+   - QR scan/login/complete flow via named tunnel hostname
    - physical Brother label print
 2. Validate Google OAuth + Sheets write on Pi (real account).
-3. Decide whether to commit current local changes as one deployment/UI/docs batch.
+3. Set up Cloudflare Access policies to restrict tunnel access to NCSU networks.
+4. Move Google OAuth app out of "Testing" mode to avoid 7-day token expiry.
+5. Add a `/health` endpoint and configure UptimeRobot for each Pi.

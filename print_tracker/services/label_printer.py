@@ -189,7 +189,7 @@ def _render_label_image(
     brand_logo = _load_brand_logo(brand_logo_path)
     if brand_logo:
         max_logo_w = text_max_width
-        max_logo_h = max(48, min(height // 4, _mm_to_px(22, dpi)))
+        max_logo_h = max(48, min(height // 6, _mm_to_px(14, dpi)))
         scaled_logo = brand_logo.copy()
         scaled_logo.thumbnail((max_logo_w, max_logo_h), Image.Resampling.NEAREST)
         logo_x = margin + (max_logo_w - scaled_logo.width) // 2
@@ -213,6 +213,15 @@ def _render_label_image(
     if logo_drawn or cleaned_brand_text:
         draw.line((margin, y, width - margin, y), fill=0, width=1)
         y += max(8, margin // 4)
+
+    for line in _wrap_text(
+        draw, "PRINT IN PROGRESS", font=title_font, max_width=text_max_width
+    ):
+        line_h = _text_height(draw, line, title_font)
+        if y + line_h > text_max_y:
+            break
+        draw.text((margin, y), line, fill=0, font=title_font)
+        y += line_h + max(4, margin // 6)
 
     # Patron name is primary visual information for human pickup sorting.
     sort_name = _format_sort_name(job.user_name)
@@ -244,31 +253,17 @@ def _render_label_image(
     if job.pi_name:
         detail_lines.append(shorten(job.pi_name, width=42, placeholder="..."))
 
-    # Reserve space for the date and ID lines at the bottom (above QR).
-    date_line = f"Printed: {date.today().strftime('%m-%d-%y')}"
-    date_line_h = _text_height(draw, date_line, body_font)
-    date_y = id_y - date_line_h - max(4, margin // 6)
-    detail_max_y = date_y - max(4, margin // 6)
-
     for raw_line in detail_lines:
         for line in _wrap_text(
             draw, raw_line, font=body_font, max_width=text_max_width
         ):
             line_h = _text_height(draw, line, body_font)
-            if y + line_h > detail_max_y:
+            if y + line_h > text_max_y:
                 break
             draw.text((margin, y), line, fill=0, font=body_font)
             y += line_h + max(6, margin // 4)
-        if y >= detail_max_y:
+        if y >= text_max_y:
             break
-
-    # Large date field below print details
-    date_font = _load_font(max(40, font_base // 10))
-    date_line = date.today().strftime("%b %d, %Y")
-    date_h = _text_height(draw, date_line, date_font)
-    if y + date_h <= text_max_y:
-        draw.text((margin, y), date_line, fill=0, font=date_font)
-        y += date_h + max(6, margin // 4)
 
     id_font_to_use = id_font
     id_w = _text_width(draw, id_line, id_font_to_use)
@@ -294,16 +289,19 @@ def _cups_command_for_image(
     orientation: str,
     extra_options: str,
 ) -> list[str]:
+    orientation_requested = (
+        "3" if _normalize_orientation(orientation) == "portrait" else "4"
+    )
     cmd = [
         "lp",
         "-d",
         queue_name,
         "-o",
-        f"PageSize={media}",
+        f"media={media}",
         "-o",
-        "MediaType=Labels",
+        f"orientation-requested={orientation_requested}",
         "-o",
-        "fit-to-page",
+        "scaling=100",
         file_path,
     ]
     raw_options = [item.strip() for item in extra_options.split(",") if item.strip()]
@@ -429,11 +427,6 @@ def create_and_print_label(
         result["printed"] = True
         result["message"] = process.stdout.strip() or "Label sent to printer queue."
         log.info("CUPS print succeeded: %s", result["message"])
-    except subprocess.CalledProcessError as exc:
-        stderr = (exc.stderr or "").strip()
-        detail = stderr if stderr else str(exc)
-        result["message"] = f"Printing failed: {detail}"
-        log.error("CUPS print failed (exit %s): %s", exc.returncode, detail)
     except Exception as exc:  # noqa: BLE001
         result["message"] = f"Printing failed: {exc}"
         log.error("CUPS print failed: %s", exc)
