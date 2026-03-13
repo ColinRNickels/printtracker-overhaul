@@ -170,19 +170,27 @@ def _render_label_image(
     title_font = _load_font(max(52, font_base // 10))
     name_font = _load_font(max(60, font_base // 8))
     body_font = _load_font(max(36, font_base // 13))
+    date_font = _load_font(max(28, font_base // 18))
     id_font = _load_font(max(20, font_base // 26))
 
-    qr_size = max(_inch_to_px(0.5, dpi), _inch_to_px(qr_size_inch, dpi))
+    qr_size = max(_inch_to_px(0.25, dpi), _inch_to_px(qr_size_inch / 2, dpi))
     qr_size = min(qr_size, width - (margin * 2))
+    staff_font = _load_font(max(18, min(width, height) // 22))
+    staff_reserve = _text_height(draw, "Staff Use", staff_font) + max(4, margin // 6)
     qr_x = width - margin - qr_size
-    qr_y = height - margin - qr_size
+    qr_y = height - margin - qr_size - staff_reserve
 
     text_max_width = width - (margin * 2)
     text_width_left_of_qr = qr_x - (margin * 2)
-    id_line = f"ID: {job.label_code}"
+    id_line = job.label_code
     id_line_h = _text_height(draw, id_line, id_font)
+    date_line = job.created_at.strftime("%m-%d-%y") if job.created_at else ""
+    date_line_h = _text_height(draw, date_line, date_font) if date_line else 0
+    date_gap = max(12, margin // 2) + 14 if date_line else 0
     id_y = height - margin - id_line_h
-    text_max_y = min(qr_y - margin, id_y - max(8, margin // 4))
+    date_y = id_y - date_line_h - date_gap if date_line else id_y
+    footer_top = (date_y if date_line else id_y) - max(8, margin // 3)
+    text_max_y = min(qr_y - margin, footer_top)
     y = margin
 
     logo_drawn = False
@@ -214,15 +222,6 @@ def _render_label_image(
         draw.line((margin, y, width - margin, y), fill=0, width=1)
         y += max(8, margin // 4)
 
-    for line in _wrap_text(
-        draw, "PRINT IN PROGRESS", font=title_font, max_width=text_max_width
-    ):
-        line_h = _text_height(draw, line, title_font)
-        if y + line_h > text_max_y:
-            break
-        draw.text((margin, y), line, fill=0, font=title_font)
-        y += line_h + max(4, margin // 6)
-
     # Patron name is primary visual information for human pickup sorting.
     sort_name = _format_sort_name(job.user_name)
     for line in _wrap_text(
@@ -238,22 +237,18 @@ def _render_label_image(
         y += line_h + max(6, margin // 4)
 
     draw.line((margin, y, width - margin, y), fill=0, width=2)
-    y += max(8, margin // 4)
+    y += 24
 
     detail_lines = [
         shorten(job.file_name, width=62, placeholder="..."),
         job.category_label,
     ]
-    if job.course_number:
-        detail_lines.append(shorten(job.course_number, width=42, placeholder="..."))
-    if job.instructor:
-        detail_lines.append(shorten(job.instructor, width=42, placeholder="..."))
-    if job.department:
-        detail_lines.append(shorten(job.department, width=42, placeholder="..."))
-    if job.pi_name:
-        detail_lines.append(shorten(job.pi_name, width=42, placeholder="..."))
+    detail_lines = [line for line in detail_lines if line]
 
-    for raw_line in detail_lines:
+    for idx, raw_line in enumerate(detail_lines):
+        # Extra spacing between file name and category
+        if idx > 0:
+            y += 14
         for line in _wrap_text(
             draw, raw_line, font=body_font, max_width=text_max_width
         ):
@@ -265,6 +260,12 @@ def _render_label_image(
         if y >= text_max_y:
             break
 
+    # Separator line above the date/ID footer
+    sep_y = footer_top
+    draw.line((margin, sep_y, width - margin, sep_y), fill=0, width=1)
+
+    if date_line:
+        draw.text((margin, date_y), date_line, fill=0, font=date_font)
     id_font_to_use = id_font
     id_w = _text_width(draw, id_line, id_font_to_use)
     while id_w > text_width_left_of_qr and id_font_to_use.size > 14:
@@ -277,6 +278,12 @@ def _render_label_image(
     draw.rectangle(
         (qr_x - 1, qr_y - 1, qr_x + qr_size, qr_y + qr_size), outline=0, width=1
     )
+
+    staff_text = "Staff Use"
+    staff_w = _text_width(draw, staff_text, staff_font)
+    staff_x = qr_x + (qr_size - staff_w) // 2
+    staff_y = qr_y + qr_size + max(4, margin // 6)
+    draw.text((staff_x, staff_y), staff_text, fill=0, font=staff_font)
 
     return image
 

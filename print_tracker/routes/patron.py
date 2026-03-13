@@ -1,6 +1,5 @@
 import io
 import re
-import time
 from datetime import datetime
 from pathlib import Path
 
@@ -67,19 +66,32 @@ def build_label_kwargs(job) -> dict:
 
 
 def _generate_label_code() -> str:
-    # Format: <PREFIX>-YYYYMMDD-HHMMSS-##
+    # Format: <PREFIX>-MM-DD-YY-XXX
     # PREFIX defaults to "PT" but can be overridden via SITE_ID to avoid
     # collisions when multiple Pis sync to the same Google Sheet.
+    # XXX is the sequential print number for that day.
     site_id = current_app.config.get("SITE_ID", "").strip().upper()
     prefix = site_id if site_id else "PT"
-    for _ in range(3):
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        for sequence in range(100):
-            code = f"{prefix}-{timestamp}-{sequence:02d}"
-            if not PrintJob.query.filter_by(label_code=code).first():
-                return code
-        time.sleep(1)
-    raise RuntimeError("Could not generate unique label code")
+    date_part = datetime.now().strftime("%m-%d-%y")
+    code_prefix = f"{prefix}-{date_part}-"
+    existing = (
+        PrintJob.query
+        .filter(PrintJob.label_code.like(f"{code_prefix}%"))
+        .all()
+    )
+    used_numbers = set()
+    for job in existing:
+        suffix = job.label_code[len(code_prefix):]
+        try:
+            used_numbers.add(int(suffix))
+        except ValueError:
+            continue
+    sequence = 1
+    while sequence in used_numbers:
+        sequence += 1
+    if sequence > 999:
+        raise RuntimeError("Could not generate unique label code")
+    return f"{code_prefix}{sequence:03d}"
 
 
 def _normalize_ncsu_email(raw_value: str) -> str:
@@ -128,6 +140,8 @@ def register():
     if request.method == "POST":
         form.update({key: request.form.get(key, "").strip() for key in form})
         form["file_name"] = _normalize_single_line(form["file_name"])
+        if form["file_name"] and not form["file_name"].lower().endswith(".stl"):
+            form["file_name"] += ".stl"
         form["first_name"] = _normalize_person_name(form["first_name"])
         form["last_name"] = _normalize_person_name(form["last_name"])
         form["course_number"] = _normalize_single_line(form["course_number"])
