@@ -108,6 +108,7 @@ this document.
   file name, project type, optional course/research details
 - QR code at bottom-right links to staff completion page
 - Optional logo from `LABEL_BRAND_LOGO_PATH`
+- Optional side-art watermark from `LABEL_SIDE_ART_PATH` (PNG or SVG)
 - Saved label images with configurable retention
 
 ### Staff dashboard (`/staff/`)
@@ -438,6 +439,20 @@ The app creates the worksheet and headers automatically on first sync.
 | `LABEL_SAVE_LABEL_FILES` | `true` | Save label PNGs for reprint/preview |
 | `LABEL_BRAND_TEXT` | `NC State University Libraries Makerspace` | Text at top of label |
 | `LABEL_BRAND_LOGO_PATH` | *(empty)* | Path to logo PNG for label header |
+| `LABEL_SIDE_ART_PATH` | `assets/noun-3d-printer-8112508.svg` | Optional large background watermark image (PNG/SVG) |
+
+### Library hours enforcement
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LIBRARY_HOURS_ENFORCE` | `true` | Enforce open-hours checks on patron registration |
+| `LIBRARY_HOURS_LIBRARY_SHORT_NAME` | `hill` | API `library_short_name` value to match |
+| `LIBRARY_HOURS_SERVICE_SHORT_NAME` | `makerspace` | API `service_short_name` value to match |
+| `LIBRARY_HOURS_POST_CLOSE_BUFFER_MINUTES` | `10` | Grace period after closing before submissions are blocked |
+
+Notes:
+- Staff sessions (`/staff` login) bypass hours checks for assisted/testing registrations.
+- Date matching uses NC local time (`America/New_York`) to align with the hours API date field.
 
 ### Email
 
@@ -481,38 +496,125 @@ Settings are stored in the database and take effect immediately:
 
 ## 9) Troubleshooting
 
+### Registration still works when space should be closed
+
+Check these first:
+- `LIBRARY_HOURS_ENFORCE=true` in `.env`.
+- `LIBRARY_HOURS_LIBRARY_SHORT_NAME` and `LIBRARY_HOURS_SERVICE_SHORT_NAME`
+   match API values for your location.
+- You are not currently staff-authenticated in that browser session
+   (`/staff` login bypasses hours checks by design).
+
+Debug command:
+
+```bash
+journalctl -u print-tracker -f
+```
+
+### Label says generated but nothing physically prints
+
+Most common causes:
+- `LABEL_PRINT_MODE=mock` (intended for testing; does not send to printer).
+- `LABEL_PRINTER_QUEUE` doesn't match the real CUPS queue name.
+- Printer is offline/out of labels or queue is paused.
+
+Checks:
+
+```bash
+grep -E '^LABEL_PRINT_MODE=|^LABEL_PRINTER_QUEUE=' .env
+lpstat -e
+lpstat -p -d
+lp -d QL-800 /usr/share/cups/data/testprint
+```
+
+### Labels render but are missing logo/side-art
+
+Check asset paths in `.env`:
+- `LABEL_BRAND_LOGO_PATH` for header logo.
+- `LABEL_SIDE_ART_PATH` for watermark (PNG or SVG).
+
+If files are missing on disk, label generation falls back gracefully and
+continues without those assets.
+
 ### Label preview shows 404
 
-Label saving is disabled in staff settings, or the label file was cleaned
-up. Enable saving and reprint.
+Label saving is disabled in staff runtime settings, or the label file was
+cleaned by retention policy. Enable saving, then reprint.
 
 ### QR scan opens wrong or unreachable URL
 
-`KIOSK_BASE_URL` in `.env` doesn't match the tunnel hostname. Should be
-`https://<hostname>` (e.g., `https://hill-print.howcanthis.be`). Verify
-the tunnel is running with `sudo systemctl status cloudflared`.
+`KIOSK_BASE_URL` in `.env` must match your live hostname:
+`https://<hostname>` (for example, `https://hill-print.howcanthis.be`).
+
+Checks:
+
+```bash
+grep '^KIOSK_BASE_URL=' .env
+sudo systemctl status cloudflared --no-pager
+```
+
+### App is up locally but unreachable from phones
+
+Potential causes:
+- Cloudflare tunnel service is down.
+- Tunnel hostname or DNS route is wrong.
+- Device is off campus Wi-Fi or has captive portal issues.
+
+Checks:
+
+```bash
+sudo systemctl status cloudflared --no-pager
+journalctl -u cloudflared -n 120 --no-pager
+```
+
+### Staff login/access problems
+
+- Confirm `STAFF_PASSWORD` in `.env` is what staff are entering.
+- Restart app after changing `.env`: `sudo systemctl restart print-tracker`.
+- Clear stale browser session/cookies if login state looks inconsistent.
 
 ### `sqlite3.OperationalError: unable to open database file`
 
-Check that `DATABASE_URL` uses an absolute path and the service user can
-write to the database directory.
+`DATABASE_URL` should point to a writable absolute path, and the service
+user must have permission to that directory.
 
 ### Google Sheets sync fails
 
-- Confirm the spreadsheet ID and worksheet name in `.env`
-- Confirm the OAuth account has edit access to the spreadsheet
-- Check logs: `journalctl -u print-tracker -f`
+Check:
+- `GOOGLE_SHEETS_SYNC_ENABLED=true`.
+- Correct spreadsheet ID and worksheet in `.env`.
+- OAuth account has edit access to the sheet.
+- Refresh token is valid.
+
+Logs:
+
+```bash
+journalctl -u print-tracker -f
+```
+
+### Email notifications fail
+
+If using Gmail API:
+- Verify OAuth values and `GOOGLE_GMAIL_SENDER`.
+
+If using SMTP:
+- Verify `SMTP_HOST`, `SMTP_PORT`, credentials, and TLS setting.
+
+Check logs for provider-specific exceptions:
+
+```bash
+journalctl -u print-tracker -f
+```
 
 ### Cloudflare Tunnel won't connect
 
-- Check `sudo systemctl status cloudflared`
-- The Pi needs outbound HTTPS access (port 443). Campus networks rarely
-  block this.
-- Re-authenticate if the cert expired: `cloudflared tunnel login`
+- Check `sudo systemctl status cloudflared`.
+- Pi needs outbound HTTPS access (port 443).
+- Re-authenticate tunnel if cert/token expired: `cloudflared tunnel login`.
 
 ### `chromium-browser has no installation candidate`
 
-Deploy script auto-detects the correct package name. Pull latest code and
+Deploy script auto-detects the right package name. Pull latest code and
 rerun deploy.
 
 ### Corrupted virtualenv

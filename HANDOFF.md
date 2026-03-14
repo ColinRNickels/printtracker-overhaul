@@ -185,9 +185,14 @@ Reference: `.env.example` (36 variables).
 | `LABEL_QR_SIZE_INCH` | `1.0` | |
 | `LABEL_BRAND_TEXT` | `NC State University Libraries Makerspace` | |
 | `LABEL_BRAND_LOGO_PATH` | (empty) | Optional PNG; auto-converted to 1-bit |
+| `LABEL_SIDE_ART_PATH` | `assets/noun-3d-printer-8112508.svg` | Optional background watermark image (PNG/SVG) |
 | `LABEL_CUPS_MEDIA` | `DK-1202` | |
 | `LABEL_CUPS_EXTRA_OPTIONS` | (empty) | |
 | `LABEL_SAVE_LABEL_FILES` | `true` | |
+| `LIBRARY_HOURS_ENFORCE` | `true` | Block patron registration when closed |
+| `LIBRARY_HOURS_LIBRARY_SHORT_NAME` | `hill` | Hours API library selector |
+| `LIBRARY_HOURS_SERVICE_SHORT_NAME` | `makerspace` | Hours API service selector |
+| `LIBRARY_HOURS_POST_CLOSE_BUFFER_MINUTES` | `10` | Grace period after close |
 | `EMAIL_PROVIDER` | `smtp` | `smtp`, `gmail_api`, or `auto` |
 | `SMTP_HOST`…`SMTP_FROM_ADDRESS` | | Standard SMTP settings |
 | `GOOGLE_OAUTH_CLIENT_ID` | | OAuth 2.0 credentials |
@@ -322,11 +327,53 @@ Copy the printed env values into the Pi's `.env`.
     session cookie hardening, rate limiting on login (Flask-Limiter),
     NCSU email domain validation, path normalization.
 
+11. **Hours enforcement behavior** — Registration checks use NC local date
+   (`America/New_York`) to match the hours API date field; staff-authenticated
+   sessions bypass the restriction by design for assisted/testing workflows.
+
 6. **README rewrite**
    - Full deployment docs: Pi setup, Cloudflare Tunnel, Google OAuth
    - Architecture diagram and roadmap
    - Configuration reference tables
    - Troubleshooting guide
+
+## On-Call Runbook (Quick Triage)
+
+Use this order during incidents:
+
+1. Confirm app process is up.
+   - sudo systemctl status print-tracker --no-pager
+   - journalctl -u print-tracker -n 120 --no-pager
+
+2. Confirm tunnel/public access path.
+   - sudo systemctl status cloudflared --no-pager
+   - journalctl -u cloudflared -n 120 --no-pager
+   - verify KIOSK_BASE_URL in .env matches the live hostname
+
+3. Check hours enforcement behavior.
+   - verify LIBRARY_HOURS_ENFORCE=true in .env
+   - verify LIBRARY_HOURS_LIBRARY_SHORT_NAME and LIBRARY_HOURS_SERVICE_SHORT_NAME
+   - if a user can still register while closed, confirm they are not in a staff-authenticated browser session
+
+4. Check physical label printing path.
+   - verify LABEL_PRINT_MODE is cups (not mock)
+   - verify LABEL_PRINTER_QUEUE exists in CUPS
+   - lpstat -e
+   - lpstat -p -d
+   - lp -d QL-800 /usr/share/cups/data/testprint
+
+5. Check label assets/layout anomalies.
+   - verify LABEL_BRAND_LOGO_PATH and LABEL_SIDE_ART_PATH files exist
+   - missing files should not block label generation, but artwork will be omitted
+
+6. Check integrations.
+   - for Sheets: verify GOOGLE_SHEETS_SYNC_ENABLED, spreadsheet ID, worksheet, and OAuth account access
+   - for email: verify EMAIL_PROVIDER path (gmail_api or smtp) and related credentials
+
+7. Last-resort dependency recovery.
+   - sudo systemctl stop print-tracker || true
+   - rm -rf .venv
+   - ./scripts/deploy_rpi.sh
 
 ## Known Risks / Follow-up Ideas
 

@@ -10,11 +10,13 @@ import logging
 import time
 import urllib.request
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
 HOURS_API_URL = "https://www.lib.ncsu.edu/api/hours/everything.json"
 CACHE_TTL = 300  # seconds between API refreshes
+HOURS_TIME_ZONE = ZoneInfo("America/New_York")
 
 _cache: dict = {"data": None, "fetched_at": 0.0}
 
@@ -69,7 +71,8 @@ def check_is_open(
     if not entries:
         return True, ""
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    # API date keys are in local NC time, not UTC.
+    today = datetime.now(HOURS_TIME_ZONE).strftime("%Y-%m-%d")
 
     target = None
     for entry in entries:

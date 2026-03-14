@@ -60,6 +60,7 @@ def build_label_kwargs(job) -> dict:
         label_orientation=current_app.config["LABEL_ORIENTATION"],
         brand_text=current_app.config["LABEL_BRAND_TEXT"],
         brand_logo_path=current_app.config["LABEL_BRAND_LOGO_PATH"],
+        side_art_path=current_app.config["LABEL_SIDE_ART_PATH"],
         cups_media=current_app.config["LABEL_CUPS_MEDIA"],
         cups_extra_options=current_app.config["LABEL_CUPS_EXTRA_OPTIONS"],
         save_label_files=operational_settings["save_label_files"],

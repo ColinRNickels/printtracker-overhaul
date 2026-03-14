@@ -1,4 +1,5 @@
 import logging
+from io import BytesIO
 import subprocess
 import tempfile
 from datetime import date, datetime, timedelta
@@ -9,6 +10,11 @@ log = logging.getLogger(__name__)
 
 import qrcode
 from PIL import Image, ImageDraw, ImageFont
+
+try:
+    import cairosvg
+except Exception:  # pragma: no cover - optional dependency at runtime
+    cairosvg = None
 
 
 def _inch_to_px(inches: float, dpi: int) -> int:
@@ -92,6 +98,43 @@ def _load_brand_logo(path: str) -> Image.Image | None:
         return None
 
 
+def _load_side_art(path: str) -> Image.Image | None:
+    if not path:
+        return None
+
+    side_art_path = Path(path).expanduser()
+    if not side_art_path.exists():
+        return None
+
+    try:
+        if side_art_path.suffix.lower() == ".svg":
+            if cairosvg is None:
+                log.warning(
+                    "LABEL_SIDE_ART_PATH points to an SVG but CairoSVG is unavailable: %s",
+                    side_art_path,
+                )
+                return None
+            raster_bytes = cairosvg.svg2png(url=str(side_art_path))
+            with Image.open(BytesIO(raster_bytes)) as raw_side_art:
+                rgba = raw_side_art.convert("RGBA")
+        else:
+            with Image.open(side_art_path) as raw_side_art:
+                rgba = raw_side_art.convert("RGBA")
+
+        alpha = rgba.getchannel("A")
+        alpha_bbox = alpha.getbbox()
+        if alpha_bbox:
+            rgba = rgba.crop(alpha_bbox)
+
+        white_bg = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+        composited = Image.alpha_composite(white_bg, rgba).convert("L")
+        # Keep grayscale detail so we can apply semi-transparent watermarking.
+        return composited
+    except Exception:  # noqa: BLE001
+        log.exception("Failed to load side art for label: %s", side_art_path)
+        return None
+
+
 def _format_sort_name(raw_name: str) -> str:
     cleaned = " ".join((raw_name or "").split())
     if not cleaned:
@@ -156,13 +199,14 @@ def _render_label_image(
     orientation: str,
     brand_text: str,
     brand_logo_path: str,
+    side_art_path: str,
 ) -> Image.Image:
     profile = _label_profile(stock, dpi, orientation=orientation)
     width = profile["width_px"]
     height = profile["height_px"]
     margin = profile["margin_px"]
 
-    image = Image.new("1", (width, height), 1)
+    image = Image.new("L", (width, height), 255)
     draw = ImageDraw.Draw(image)
 
     font_base = min(width, height)
@@ -177,11 +221,16 @@ def _render_label_image(
     qr_size = min(qr_size, width - (margin * 2))
     staff_font = _load_font(max(18, min(width, height) // 22))
     staff_reserve = _text_height(draw, "Staff Use", staff_font) + max(4, margin // 6)
-    qr_x = width - margin - qr_size
+    right_col_width = qr_size
+    side_art = _load_side_art(side_art_path)
+    text_max_width = width - (margin * 2)
+    qr_col_x = width - margin - right_col_width
+    qr_x = qr_col_x + (right_col_width - qr_size) // 2
+
     qr_y = height - margin - qr_size - staff_reserve
 
-    text_max_width = width - (margin * 2)
     text_width_left_of_qr = qr_x - (margin * 2)
+    text_right_edge = margin + text_max_width
     id_line = job.label_code
     id_line_h = _text_height(draw, id_line, id_font)
     date_line = job.created_at.strftime("%m-%d-%y") if job.created_at else ""
@@ -195,6 +244,27 @@ def _render_label_image(
 
     logo_drawn = False
     brand_logo = _load_brand_logo(brand_logo_path)
+
+    if side_art:
+        watermark_opacity = 0.34
+        watermark_top = margin + max(_mm_to_px(9, dpi), height // 7)
+        watermark_bottom = max(watermark_top + 1, text_max_y)
+        max_side_w = max(1, text_max_width)
+        max_side_h = max(1, watermark_bottom - watermark_top)
+
+        side_art = side_art.copy()
+        side_art.thumbnail((max_side_w, max_side_h), Image.Resampling.LANCZOS)
+
+        side_x = margin + (text_max_width - side_art.width) // 2
+        # Bias the watermark downward so the top header remains crisp.
+        side_y = watermark_bottom - side_art.height
+
+        alpha_mask = side_art.point(
+            lambda p: int((255 - p) * watermark_opacity), mode="L"
+        )
+        black_fill = Image.new("L", side_art.size, 0)
+        image.paste(black_fill, (side_x, side_y), alpha_mask)
+
     if brand_logo:
         max_logo_w = text_max_width
         max_logo_h = max(48, min(height // 6, _mm_to_px(14, dpi)))
@@ -219,7 +289,7 @@ def _render_label_image(
             y += line_h + max(2, margin // 6)
 
     if logo_drawn or cleaned_brand_text:
-        draw.line((margin, y, width - margin, y), fill=0, width=1)
+        draw.line((margin, y, text_right_edge, y), fill=0, width=1)
         y += max(8, margin // 4)
 
     # Patron name is primary visual information for human pickup sorting.
@@ -236,7 +306,7 @@ def _render_label_image(
         draw.text((margin, y), line, fill=0, font=name_font)
         y += line_h + max(6, margin // 4)
 
-    draw.line((margin, y, width - margin, y), fill=0, width=2)
+    draw.line((margin, y, text_right_edge, y), fill=0, width=2)
     y += 24
 
     detail_lines = [
@@ -262,7 +332,7 @@ def _render_label_image(
 
     # Separator line above the date/ID footer
     sep_y = footer_top
-    draw.line((margin, sep_y, width - margin, sep_y), fill=0, width=1)
+    draw.line((margin, sep_y, text_right_edge, sep_y), fill=0, width=1)
 
     if date_line:
         draw.text((margin, date_y), date_line, fill=0, font=date_font)
@@ -285,7 +355,7 @@ def _render_label_image(
     staff_y = qr_y + qr_size + max(4, margin // 6)
     draw.text((staff_x, staff_y), staff_text, fill=0, font=staff_font)
 
-    return image
+    return image.convert("1")
 
 
 def _cups_command_for_image(
@@ -350,6 +420,7 @@ def create_and_print_label(
     label_orientation: str,
     brand_text: str,
     brand_logo_path: str,
+    side_art_path: str,
     cups_media: str,
     cups_extra_options: str,
     save_label_files: bool,
@@ -365,6 +436,7 @@ def create_and_print_label(
         orientation=label_orientation,
         brand_text=brand_text,
         brand_logo_path=brand_logo_path,
+        side_art_path=side_art_path,
     )
     result = {
         "image_path": "",
