@@ -733,6 +733,17 @@ th {
     font-size: 1rem;
 }
 
+.registry-filter-form {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.65rem;
+    margin-bottom: 0.65rem;
+}
+
+.registry-bulk-actions {
+    margin-bottom: 0.7rem;
+}
+
 .button-link-warn {
     border-color: #e2af38;
     color: #7a5600;

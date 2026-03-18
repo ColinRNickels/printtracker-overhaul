@@ -127,6 +127,55 @@
 <section class="panel">
     <h3>Worker Registry</h3>
     <p class="lead-line">Deactivate stale test or retired agents to keep the registry clean. Reactivated agents will go back to pending until they heartbeat again.</p>
+    <form method="get" action="{{ url_for('admin.dashboard') }}" class="registry-filter-form">
+        <label>
+            Health
+            <select name="health">
+                <option value="all" {% if registry_filters.health == 'all' %}selected{% endif %}>All</option>
+                <option value="online" {% if registry_filters.health == 'online' %}selected{% endif %}>Online</option>
+                <option value="stale" {% if registry_filters.health == 'stale' %}selected{% endif %}>Stale</option>
+                <option value="offline" {% if registry_filters.health == 'offline' %}selected{% endif %}>Offline</option>
+                <option value="inactive" {% if registry_filters.health == 'inactive' %}selected{% endif %}>Inactive</option>
+            </select>
+        </label>
+        <label>
+            Space
+            <select name="space">
+                <option value="all" {% if registry_filters.space == 'all' %}selected{% endif %}>All Spaces</option>
+                {% for option in space_filter_options %}
+                <option value="{{ option.value }}" {% if registry_filters.space == option.value %}selected{% endif %}>{{ option.display }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>
+            Search
+            <input type="text" name="q" value="{{ registry_filters.q }}" placeholder="Agent ID, name, queue">
+        </label>
+        <div class="inline-actions">
+            <button type="submit">Apply</button>
+            <a class="button-link" href="{{ url_for('admin.dashboard') }}">Reset</a>
+        </div>
+    </form>
+
+    <div class="inline-actions registry-bulk-actions">
+        <form method="post" action="{{ url_for('admin.bulk_worker_action') }}" class="inline-action">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="deactivate_stale_offline">
+            <input type="hidden" name="health" value="{{ registry_filters.health }}">
+            <input type="hidden" name="space" value="{{ registry_filters.space }}">
+            <input type="hidden" name="q" value="{{ registry_filters.q }}">
+            <button type="submit" class="button-link">Deactivate stale/offline ({{ stale_or_offline_active_count }})</button>
+        </form>
+        <form method="post" action="{{ url_for('admin.bulk_worker_action') }}" class="inline-action" onsubmit="return confirm('Remove all inactive workers from the registry?');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="remove_inactive">
+            <input type="hidden" name="health" value="{{ registry_filters.health }}">
+            <input type="hidden" name="space" value="{{ registry_filters.space }}">
+            <input type="hidden" name="q" value="{{ registry_filters.q }}">
+            <button type="submit" class="button-link button-danger">Remove inactive ({{ inactive_count }})</button>
+        </form>
+    </div>
+
     <div class="table-wrap">
         <table>
             <thead>

@@ -1,5 +1,6 @@
 import os
 import unittest
+from datetime import datetime, timedelta, timezone
 
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
@@ -41,6 +42,32 @@ class AdminWorkerRegistryTests(unittest.TestCase):
             printer_queue="QL-800",
             status="online",
             is_active=True,
+        )
+        db.session.add(worker)
+        db.session.commit()
+        return worker
+
+    def _create_worker_with_heartbeat(
+        self,
+        *,
+        agent_id: str,
+        space_slug: str,
+        is_active: bool,
+        heartbeat_seconds_ago: int | None,
+    ) -> WorkerNode:
+        heartbeat = None
+        if heartbeat_seconds_ago is not None:
+            heartbeat = datetime.now(timezone.utc) - timedelta(
+                seconds=heartbeat_seconds_ago
+            )
+        worker = WorkerNode(
+            agent_id=agent_id,
+            display_name=f"Worker {agent_id}",
+            space_slug=space_slug,
+            printer_queue="QL-800",
+            status="online" if is_active else "inactive",
+            is_active=is_active,
+            last_heartbeat_at=heartbeat,
         )
         db.session.add(worker)
         db.session.commit()
@@ -119,6 +146,84 @@ class AdminWorkerRegistryTests(unittest.TestCase):
         qr_mode_setting = db.session.get(AppSetting, KEY_QR_PAYLOAD_MODE)
         self.assertIsNotNone(qr_mode_setting)
         self.assertEqual(qr_mode_setting.value, "url")
+
+    def test_registry_filters_by_health_space_and_query(self):
+        online = self._create_worker_with_heartbeat(
+            agent_id="pi-online",
+            space_slug="maker-studio",
+            is_active=True,
+            heartbeat_seconds_ago=5,
+        )
+        stale = self._create_worker_with_heartbeat(
+            agent_id="pi-stale",
+            space_slug="makerspace",
+            is_active=True,
+            heartbeat_seconds_ago=500,
+        )
+        inactive = self._create_worker_with_heartbeat(
+            agent_id="pi-inactive",
+            space_slug="maker-studio",
+            is_active=False,
+            heartbeat_seconds_ago=None,
+        )
+
+        response = self.client.get("/admin/?health=stale&space=makerspace&q=pi-stale")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(f"/admin/workers/{stale.id}/state", html)
+        self.assertNotIn(f"/admin/workers/{online.id}/state", html)
+        self.assertNotIn(f"/admin/workers/{inactive.id}/state", html)
+
+    def test_bulk_deactivate_stale_offline(self):
+        stale = self._create_worker_with_heartbeat(
+            agent_id="pi-stale-target",
+            space_slug="maker-studio",
+            is_active=True,
+            heartbeat_seconds_ago=600,
+        )
+        online = self._create_worker_with_heartbeat(
+            agent_id="pi-online-keep",
+            space_slug="maker-studio",
+            is_active=True,
+            heartbeat_seconds_ago=5,
+        )
+
+        response = self.client.post(
+            "/admin/workers/bulk",
+            data={"action": "deactivate_stale_offline"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(db.session.get(WorkerNode, stale.id).is_active)
+        self.assertTrue(db.session.get(WorkerNode, online.id).is_active)
+
+    def test_bulk_remove_inactive_unassigns_jobs(self):
+        inactive = self._create_worker_with_heartbeat(
+            agent_id="pi-inactive-remove",
+            space_slug="maker-studio",
+            is_active=False,
+            heartbeat_seconds_ago=None,
+        )
+        active = self._create_worker_with_heartbeat(
+            agent_id="pi-active-keep",
+            space_slug="maker-studio",
+            is_active=True,
+            heartbeat_seconds_ago=5,
+        )
+        job = self._create_job(inactive.id)
+
+        response = self.client.post(
+            "/admin/workers/bulk",
+            data={"action": "remove_inactive"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(db.session.get(WorkerNode, inactive.id))
+        self.assertIsNotNone(db.session.get(WorkerNode, active.id))
+        self.assertIsNone(db.session.get(PrintJob, job.id).assigned_worker_id)
 
 
 if __name__ == "__main__":

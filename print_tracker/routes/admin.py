@@ -30,6 +30,8 @@ from .staff import STAFF_SESSION_KEY, _build_space_dashboard, _sanitize_next_url
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
 
+HEALTH_FILTERS = {"all", "online", "stale", "offline", "inactive"}
+
 
 def _space_display_lookup() -> dict[str, str]:
     return {
@@ -60,6 +62,64 @@ def _worker_registry_rows() -> list[dict[str, object]]:
     return rows
 
 
+def _worker_matches_filters(
+    row: dict[str, object],
+    *,
+    health: str,
+    space: str,
+    query: str,
+) -> bool:
+    worker = row["worker"]
+    health_state = row["health"]["state"]
+
+    if health != "all":
+        if health == "inactive":
+            if worker.is_active:
+                return False
+        elif health_state != health:
+            return False
+
+    if space != "all" and normalize_space_slug(worker.space_slug) != space:
+        return False
+
+    if query:
+        haystack = " ".join(
+            [
+                worker.display_name or "",
+                worker.agent_id or "",
+                worker.space_slug or "",
+                worker.printer_queue or "",
+            ]
+        ).lower()
+        if query not in haystack:
+            return False
+
+    return True
+
+
+def _registry_filters_from_request() -> dict[str, str]:
+    health = (request.args.get("health", "all") or "all").strip().lower()
+    if health not in HEALTH_FILTERS:
+        health = "all"
+
+    raw_space = (request.args.get("space", "all") or "all").strip()
+    space = "all" if raw_space.lower() == "all" else normalize_space_slug(raw_space)
+    valid_spaces = {normalize_space_slug(space["slug"]) for space in get_spaces()}
+    if space != "all" and space not in valid_spaces:
+        space = "all"
+
+    query = (request.args.get("q", "") or "").strip().lower()
+    return {"health": health, "space": space, "q": query}
+
+
+def _redirect_with_registry_filters() -> str:
+    health = (request.form.get("health") or "all").strip().lower()
+    space = (request.form.get("space") or "all").strip()
+    query = (request.form.get("q") or "").strip()
+    params = {"health": health, "space": space, "q": query}
+    return url_for("admin.dashboard", **params)
+
+
 @bp.before_request
 def require_staff_password():
     if session.get(STAFF_SESSION_KEY):
@@ -78,7 +138,31 @@ def dashboard():
         or "127.0.0.1" in kiosk_base_url
     )
     space_dashboard, queue_totals = _build_space_dashboard()
-    worker_registry = _worker_registry_rows()
+    registry_filters = _registry_filters_from_request()
+    worker_registry_all = _worker_registry_rows()
+    worker_registry = [
+        row
+        for row in worker_registry_all
+        if _worker_matches_filters(
+            row,
+            health=registry_filters["health"],
+            space=registry_filters["space"],
+            query=registry_filters["q"],
+        )
+    ]
+    stale_or_offline_active_count = sum(
+        1
+        for row in worker_registry_all
+        if row["worker"].is_active and row["health"]["state"] in {"stale", "offline"}
+    )
+    inactive_count = sum(1 for row in worker_registry_all if not row["worker"].is_active)
+    space_filter_options = [
+        {
+            "value": normalize_space_slug(space["slug"]),
+            "display": space["display_name"],
+        }
+        for space in get_spaces()
+    ]
 
     return render_template(
         "admin_dashboard.html",
@@ -89,6 +173,10 @@ def dashboard():
         queue_totals=queue_totals,
         space_dashboard=space_dashboard,
         worker_registry=worker_registry,
+        registry_filters=registry_filters,
+        space_filter_options=space_filter_options,
+        stale_or_offline_active_count=stale_or_offline_active_count,
+        inactive_count=inactive_count,
     )
 
 
@@ -159,3 +247,47 @@ def delete_worker(worker_id: int):
 
     flash(f"{worker_name} removed from worker registry.", "success")
     return redirect(url_for("admin.dashboard"))
+
+
+@bp.route("/workers/bulk", methods=["POST"])
+def bulk_worker_action():
+    action = (request.form.get("action") or "").strip().lower()
+
+    if action == "deactivate_stale_offline":
+        rows = _worker_registry_rows()
+        target_ids = [
+            row["worker"].id
+            for row in rows
+            if row["worker"].is_active and row["health"]["state"] in {"stale", "offline"}
+        ]
+        if target_ids:
+            WorkerNode.query.filter(WorkerNode.id.in_(target_ids)).update(
+                {"is_active": False, "status": "inactive"},
+                synchronize_session=False,
+            )
+            db.session.commit()
+            flash(f"Deactivated {len(target_ids)} stale/offline worker(s).", "success")
+        else:
+            flash("No stale/offline active workers to deactivate.", "warning")
+        return redirect(_redirect_with_registry_filters())
+
+    if action == "remove_inactive":
+        workers = WorkerNode.query.filter_by(is_active=False).all()
+        if not workers:
+            flash("No inactive workers to remove.", "warning")
+            return redirect(_redirect_with_registry_filters())
+
+        worker_ids = [worker.id for worker in workers]
+        PrintJob.query.filter(PrintJob.assigned_worker_id.in_(worker_ids)).update(
+            {"assigned_worker_id": None},
+            synchronize_session=False,
+        )
+        removed = len(workers)
+        for worker in workers:
+            db.session.delete(worker)
+        db.session.commit()
+        flash(f"Removed {removed} inactive worker(s) from registry.", "success")
+        return redirect(_redirect_with_registry_filters())
+
+    flash("Invalid bulk worker action.", "error")
+    return redirect(_redirect_with_registry_filters())
