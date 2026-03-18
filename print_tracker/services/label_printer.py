@@ -217,17 +217,19 @@ def _render_label_image(
     date_font = _load_font(max(28, font_base // 18))
     id_font = _load_font(max(20, font_base // 26))
 
-    qr_size = max(_inch_to_px(0.25, dpi), _inch_to_px(qr_size_inch / 2, dpi))
+    qr_size = max(_inch_to_px(0.5, dpi), _inch_to_px(qr_size_inch, dpi))
     qr_size = min(qr_size, width - (margin * 2))
     staff_font = _load_font(max(18, min(width, height) // 22))
-    staff_reserve = _text_height(draw, "Staff Use", staff_font) + max(4, margin // 6)
+    staff_h = _text_height(draw, "Staff Use", staff_font)
+    staff_gap = max(4, margin // 6)
+    staff_reserve = staff_h + staff_gap + max(2, margin // 5)
     right_col_width = qr_size
     side_art = _load_side_art(side_art_path)
     text_max_width = width - (margin * 2)
     qr_col_x = width - margin - right_col_width
     qr_x = qr_col_x + (right_col_width - qr_size) // 2
 
-    qr_y = height - margin - qr_size - staff_reserve
+    qr_y = max(margin, height - margin - qr_size - staff_reserve)
 
     text_width_left_of_qr = qr_x - (margin * 2)
     text_right_edge = margin + text_max_width
@@ -356,7 +358,9 @@ def _render_label_image(
     staff_text = "Staff Use"
     staff_w = _text_width(draw, staff_text, staff_font)
     staff_x = qr_x + (qr_size - staff_w) // 2
-    staff_y = qr_y + qr_size + max(4, margin // 6)
+    staff_x = max(margin, min(staff_x, width - margin - staff_w))
+    staff_y = qr_y + qr_size + staff_gap
+    staff_y = min(staff_y, height - margin - staff_h)
     draw.text((staff_x, staff_y), staff_text, fill=0, font=staff_font)
 
     return image.convert("1")
