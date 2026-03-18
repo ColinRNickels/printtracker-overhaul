@@ -20,7 +20,19 @@ DEFAULT_SPACES = [
 
 
 def normalize_space_slug(value: str | None) -> str:
-    return (value or "").strip().lower().replace("_", "-")
+    return (
+        (value or "")
+        .strip()
+        .lower()
+        .replace("_", "-")
+        .replace(" ", "-")
+        .replace("/", "-")
+    )
+
+
+def _normalize_space_key(value: str | None) -> str:
+    normalized = normalize_space_slug(value)
+    return normalized.replace("-", "").replace(" ", "")
 
 
 def _space_records_from_string(raw_value: str | None) -> list[dict[str, str]]:
@@ -60,10 +72,15 @@ def get_default_space() -> dict[str, str]:
 
 def get_space(space_slug: str | None) -> dict[str, str] | None:
     normalized = normalize_space_slug(space_slug)
+    normalized_key = _normalize_space_key(space_slug)
     if not normalized:
         return get_default_space()
     for space in get_spaces():
         if space["slug"] == normalized:
+            return dict(space)
+        if _normalize_space_key(space.get("display_name")) == normalized_key:
+            return dict(space)
+        if _normalize_space_key(space.get("printer_name")) == normalized_key:
             return dict(space)
     return None
 
