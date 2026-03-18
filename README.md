@@ -167,6 +167,32 @@ without changing route structure.
 
 ## 2) Quick Local Start
 
+### 2.0 Preferred local path: Docker Compose (app + PostgreSQL)
+
+Use Docker Compose as the default way to run the server/agent proof of concept
+locally.
+
+```bash
+cp .env.docker.example .env.docker
+# Update KIOSK_BASE_URL and AGENT_BOOTSTRAP_KEY in .env.docker
+docker compose up --build
+```
+
+Open:
+
+- Register: `http://localhost:5000/makerspace`
+- Staff: `http://localhost:5000/staff/`
+- Admin: `http://localhost:5000/admin/`
+
+Notes:
+
+- The app waits for PostgreSQL health before starting.
+- App healthcheck targets `/staff/login` so `docker compose ps` shows readiness.
+- App data persists in named volumes (`app-instance`, `app-labels`,
+  `postgres-data`).
+
+### 2.1 Direct Python start (fallback)
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -187,28 +213,18 @@ If port 5000 is busy:
 PORT=5050 python run.py
 ```
 
-### 2.1 Docker POC start
-
-For the server/agent proof of concept, you can run the server locally in
-Docker with PostgreSQL:
-
-```bash
-cp .env.example .env
-docker compose up --build
-```
-
-Important POC settings:
+Important POC settings (Compose):
 - Set `KIOSK_BASE_URL` to your Mac's LAN IP, for example
    `http://192.168.1.50:5000`, so QR links are usable from phones and the Pi.
-- Set `AGENT_BOOTSTRAP_KEY` before registering a Pi agent.
-- `WORKER_DISPATCH_ENABLED=true` in `docker-compose.yml` means the server
-   will queue jobs for Pi dispatch instead of printing locally.
+- Set `AGENT_BOOTSTRAP_KEY` in `.env.docker` before registering a Pi agent.
+- `WORKER_DISPATCH_ENABLED=true` in `.env.docker` means the server queues jobs
+   for Pi dispatch instead of printing locally.
 
-Space-aware entry points:
+Compose space-aware entry points:
 - `http://<mac-ip>:5000/makerspace`
 - `http://<mac-ip>:5000/maker-studio`
 
-Pi agent API endpoints added for the POC:
+Pi agent API endpoints:
 - `POST /api/agents/register`
 - `POST /api/agents/heartbeat`
 - `GET /api/agents/jobs`

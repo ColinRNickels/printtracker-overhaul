@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 .env
+.env.docker
 .env.pi-agent
 instance/*.db
 instance/*.db-shm
