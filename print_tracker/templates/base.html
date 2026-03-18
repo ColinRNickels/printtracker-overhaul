@@ -9,14 +9,14 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
 <body class="{% if request.endpoint %}route-{{ request.endpoint|replace('.', '-') }}{% endif %}">
-    {% set on_patron_route = request.endpoint and request.endpoint.startswith('patron.') %}
+    {% set on_patron_route = request.endpoint and (request.endpoint.startswith('patron.') or request.endpoint.startswith('spaces.')) %}
     <header class="site-header">
-        <a class="brand" href="{{ url_for('patron.register') }}" aria-label="NC State University Libraries Makerspace Print Tracker">
+        <a class="brand" href="{{ url_for('spaces.register_space', space_slug=default_space.slug) }}" aria-label="NC State University Libraries Makerspace Print Tracker">
             <img src="{{ url_for('static', filename='ncsu-makerspace-logo-long-v2.png') }}" alt="NC State University Libraries Makerspace logo">
         </a>
         {% if not on_patron_route %}
         <nav>
-            <a href="{{ url_for('patron.register') }}" {% if request.endpoint and request.endpoint.startswith('patron.') %}class="nav-active"{% endif %}>Register</a>
+            <a href="{{ url_for('spaces.register_space', space_slug=default_space.slug) }}" {% if on_patron_route %}class="nav-active"{% endif %}>Register</a>
             <a href="{{ url_for('staff.dashboard') }}" {% if request.endpoint and request.endpoint.startswith('staff.') %}class="nav-active"{% endif %}>Staff</a>
             <a href="{{ url_for('reports.monthly') }}" {% if request.endpoint and request.endpoint.startswith('reports.') %}class="nav-active"{% endif %}>Reports</a>
         </nav>

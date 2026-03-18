@@ -3,6 +3,7 @@
 {% block content %}
 <section class="panel kiosk-compact">
     <h2>Print in Progress</h2>
+    <p class="muted-line">Location: <strong>{{ selected_space.display_name }}</strong></p>
 
     {% if not makerspace_is_open %}
     <div class="alert alert-closed" role="alert">

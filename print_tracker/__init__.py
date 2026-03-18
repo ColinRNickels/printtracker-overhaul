@@ -15,6 +15,8 @@ from .extensions import csrf, db, limiter
 @event.listens_for(Engine, "connect")
 def _set_sqlite_wal(dbapi_connection, connection_record):
     """Enable WAL mode for SQLite for better concurrent read performance."""
+    if not dbapi_connection.__class__.__module__.startswith("sqlite3"):
+        return
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.close()
@@ -42,6 +44,38 @@ def _apply_schema_upgrades() -> None:
         upgrade_statements.append(
             "ALTER TABLE print_jobs ADD COLUMN location VARCHAR(120)"
         )
+    if "space_slug" not in existing_columns:
+        upgrade_statements.append(
+            "ALTER TABLE print_jobs ADD COLUMN space_slug VARCHAR(64)"
+        )
+    if "assigned_worker_id" not in existing_columns:
+        upgrade_statements.append(
+            "ALTER TABLE print_jobs ADD COLUMN assigned_worker_id INTEGER"
+        )
+    if "print_status" not in existing_columns:
+        upgrade_statements.append(
+            "ALTER TABLE print_jobs ADD COLUMN print_status VARCHAR(32) DEFAULT 'not_requested'"
+        )
+    if "print_dispatched_at" not in existing_columns:
+        upgrade_statements.append(
+            "ALTER TABLE print_jobs ADD COLUMN print_dispatched_at DATETIME"
+        )
+    if "printed_at" not in existing_columns:
+        upgrade_statements.append(
+            "ALTER TABLE print_jobs ADD COLUMN printed_at DATETIME"
+        )
+    if "print_attempts" not in existing_columns:
+        upgrade_statements.append(
+            "ALTER TABLE print_jobs ADD COLUMN print_attempts INTEGER DEFAULT 0"
+        )
+    if "print_error" not in existing_columns:
+        upgrade_statements.append(
+            "ALTER TABLE print_jobs ADD COLUMN print_error TEXT"
+        )
+    if "manual_fallback_required" not in existing_columns:
+        upgrade_statements.append(
+            "ALTER TABLE print_jobs ADD COLUMN manual_fallback_required BOOLEAN DEFAULT FALSE"
+        )
 
     if not upgrade_statements:
         return
@@ -49,6 +83,11 @@ def _apply_schema_upgrades() -> None:
     with db.engine.begin() as connection:
         for statement in upgrade_statements:
             connection.execute(text(statement))
+        connection.execute(
+            text(
+                "UPDATE print_jobs SET print_status = COALESCE(print_status, 'not_requested'), print_attempts = COALESCE(print_attempts, 0), manual_fallback_required = COALESCE(manual_fallback_required, FALSE)"
+            )
+        )
 
 
 def _normalize_sqlite_database_uri(*, base_dir: Path, uri: str) -> str:
@@ -129,22 +168,36 @@ def create_app() -> Flask:
     limiter.init_app(app)
 
     from . import models  # noqa: F401
+    from .routes.api import bp as api_bp
     from .routes.patron import bp as patron_bp
     from .routes.reports import bp as reports_bp
+    from .routes.spaces import bp as spaces_bp
     from .routes.staff import bp as staff_bp
+    from .services.spaces import get_default_space, get_spaces
 
     # Ensure first-run instances don't fail on missing tables.
     with app.app_context():
         db.create_all()
         _apply_schema_upgrades()
 
+    app.register_blueprint(spaces_bp)
     app.register_blueprint(patron_bp)
     app.register_blueprint(staff_bp)
     app.register_blueprint(reports_bp)
+    app.register_blueprint(api_bp)
+
+    @app.context_processor
+    def inject_space_navigation():
+        return {
+            "available_spaces": get_spaces(),
+            "default_space": get_default_space(),
+        }
 
     @app.route("/")
     def index():
-        return redirect(url_for("patron.register"))
+        return redirect(
+            url_for("spaces.register_space", space_slug=get_default_space()["slug"])
+        )
 
     # Backward-compat: redirect old /kiosk/* URLs to /patron/*
     @app.route("/kiosk/")

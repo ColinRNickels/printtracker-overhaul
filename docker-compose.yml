@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: printtracker
+      POSTGRES_USER: printtracker
+      POSTGRES_PASSWORD: printtracker
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  app:
+    build: .
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: postgresql+psycopg://printtracker:printtracker@db:5432/printtracker
+      SECRET_KEY: local-dev-secret-change-me
+      STAFF_PASSWORD: staffpw
+      PORT: 5000
+      LABEL_PRINT_MODE: mock
+      WORKER_DISPATCH_ENABLED: "true"
+      AGENT_BOOTSTRAP_KEY: ${AGENT_BOOTSTRAP_KEY:-change-me-before-registering-a-pi}
+      AGENT_POLL_BATCH_SIZE: 5
+      KIOSK_BASE_URL: ${KIOSK_BASE_URL:-http://localhost:5000}
+      PRINT_TRACKER_SPACES: ${PRINT_TRACKER_SPACES:-makerspace|Makerspace|MK|Makerspace,maker-studio|Maker Studio|MS|Maker Studio}
+      LIBRARY_HOURS_ENFORCE: "false"
+      GOOGLE_SHEETS_SYNC_ENABLED: "false"
+    ports:
+      - "5000:5000"
+    volumes:
+      - .:/app
+
+volumes:
+  postgres-data:

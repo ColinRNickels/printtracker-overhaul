@@ -98,6 +98,27 @@ Each Pi becomes a lightweight print agent that polls the server for pending
 labels. See [Architecture Roadmap](#architecture-roadmap) at the end of
 this document.
 
+### Proof of Concept (current fork direction)
+
+The current implementation work is moving toward a split architecture proof
+of concept:
+
+```text
+MacBook on LAN
+   Docker app + PostgreSQL
+   http://<mac-ip>:5000/makerspace
+               |
+               | HTTP polling
+               v
+Raspberry Pi agent
+   scripts/pi_worker.py
+   CUPS -> Brother QL-800
+```
+
+This POC uses path-based spaces from the start so the same URLs can later
+move to a stable host such as `print-tracker.experiment.lib.ncsu.edu`
+without changing route structure.
+
 ---
 
 ## 1) What's Implemented
@@ -164,6 +185,62 @@ If port 5000 is busy:
 
 ```bash
 PORT=5050 python run.py
+```
+
+### 2.1 Docker POC start
+
+For the server/agent proof of concept, you can run the server locally in
+Docker with PostgreSQL:
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+Important POC settings:
+- Set `KIOSK_BASE_URL` to your Mac's LAN IP, for example
+   `http://192.168.1.50:5000`, so QR links are usable from phones and the Pi.
+- Set `AGENT_BOOTSTRAP_KEY` before registering a Pi agent.
+- `WORKER_DISPATCH_ENABLED=true` in `docker-compose.yml` means the server
+   will queue jobs for Pi dispatch instead of printing locally.
+
+Space-aware entry points:
+- `http://<mac-ip>:5000/makerspace`
+- `http://<mac-ip>:5000/maker-studio`
+
+Pi agent API endpoints added for the POC:
+- `POST /api/agents/register`
+- `POST /api/agents/heartbeat`
+- `GET /api/agents/jobs`
+- `POST /api/agents/jobs/<label_code>/printed`
+- `POST /api/agents/jobs/<label_code>/failed`
+
+### 2.2 Raspberry Pi agent POC
+
+The first Pi-side worker is now implemented as `scripts/pi_worker.py`.
+It:
+
+- registers with the server using a bootstrap key
+- polls only for jobs assigned to its configured space
+- renders and prints labels locally via the existing label printer service
+- reports success or failure back to the server
+
+Minimal setup on a Pi:
+
+```bash
+cp .env.pi-agent.example .env.pi-agent
+./scripts/install_pi_agent.sh \
+   --server-url http://192.168.1.50:5000 \
+   --space makerspace \
+   --agent-id makerspace-pi-01 \
+   --bootstrap-key your-bootstrap-key \
+   --printer-queue QL-800
+```
+
+You can also run the worker directly for testing:
+
+```bash
+PI_AGENT_ENV_FILE=.env.pi-agent ./.venv/bin/python scripts/pi_worker.py
 ```
 
 ---

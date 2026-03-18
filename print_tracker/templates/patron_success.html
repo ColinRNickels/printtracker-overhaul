@@ -3,7 +3,11 @@
 {% block content %}
 <section class="panel kiosk-compact">
     <h2 class="success-heading">You're All Set</h2>
-    {% if label_result and label_result.printed %}
+    <p class="muted-line">Location: <strong>{{ selected_space.display_name }}</strong></p>
+    {% if label_result and label_result.queued %}
+        <p class="status-line success">Your print has been queued for {{ selected_space.display_name }}.</p>
+        <p class="muted-line">If the label does not print shortly, ask staff to use your Print ID for manual tracking.</p>
+    {% elif label_result and label_result.printed %}
         <p class="status-line success">Your label is printing now.</p>
     {% elif label_result and label_result.image_path %}
         <p class="status-line success">Your print has been registered.</p>
@@ -14,7 +18,10 @@
     {% endif %}
 
     <ol class="next-steps">
-        {% if label_result and label_result.printed %}
+        {% if label_result and label_result.queued %}
+            <li>Wait for the {{ selected_space.display_name }} label station to print your label.</li>
+            <li>If nothing prints, ask staff to create a manual tracking slip with your Print ID.</li>
+        {% elif label_result and label_result.printed %}
             <li>Pick up the printed label from the label printer.</li>
             <li>Place the label next to your print on the printer bed.</li>
         {% else %}
@@ -31,7 +38,7 @@
             var s = 10, el = document.getElementById('seconds');
             var t = setInterval(function() {
                 s--; el.textContent = s;
-                if (s <= 0) { clearInterval(t); window.location.href = "{{ url_for('patron.register') }}"; }
+                if (s <= 0) { clearInterval(t); window.location.href = "{{ reset_url }}"; }
             }, 1000);
         })();
     </script>

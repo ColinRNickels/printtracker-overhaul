@@ -30,7 +30,7 @@
 
     <p class="muted-line">Need to print a label outside open hours? Use staff-assisted registration:</p>
     <div class="inline-actions">
-        <a class="button-link" href="{{ url_for('patron.register') }}">Staff Register Print (Outside Hours)</a>
+        <a class="button-link" href="{{ url_for('spaces.register_space', space_slug=default_space.slug) }}">Staff Register Print (Outside Hours)</a>
     </div>
 
     <form method="post" action="{{ url_for('staff.logout') }}" class="inline-action">

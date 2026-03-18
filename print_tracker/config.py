@@ -44,6 +44,7 @@ class Config:
     SQLALCHEMY_DATABASE_URI = os.environ.get(
         "DATABASE_URL", f"sqlite:///{DEFAULT_DB_PATH}"
     )
+    SQLALCHEMY_ENGINE_OPTIONS = {"pool_pre_ping": True}
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     STAFF_PASSWORD_HASH = generate_password_hash(
         os.environ.get("STAFF_PASSWORD", "staffpw")
@@ -136,6 +137,15 @@ class Config:
 
     DEFAULT_PRINTER_NAME = os.environ.get("DEFAULT_PRINTER_NAME", "Makerspace")
     SITE_ID = os.environ.get("SITE_ID", "").strip().upper()
+    PRINT_TRACKER_SPACES = os.environ.get(
+        "PRINT_TRACKER_SPACES",
+        "makerspace|Makerspace|MK|Makerspace,maker-studio|Maker Studio|MS|Maker Studio",
+    ).strip()
+    WORKER_DISPATCH_ENABLED = _env_flag("WORKER_DISPATCH_ENABLED", default=False)
+    AGENT_BOOTSTRAP_KEY = os.environ.get("AGENT_BOOTSTRAP_KEY", "").strip()
+    AGENT_POLL_BATCH_SIZE = _env_int(
+        "AGENT_POLL_BATCH_SIZE", default=5, minimum=1, maximum=25
+    )
 
     # Library hours enforcement
     # When True, patrons cannot submit jobs outside open hours (+ buffer).

@@ -8,3 +8,5 @@ CairoSVG>=2.7.1,<3
 google-api-python-client>=2.130.0,<3
 google-auth>=2.29.0,<3
 google-auth-oauthlib>=1.2.0,<2
+psycopg[binary]>=3.2.0,<4
+gunicorn>=22.0.0,<23

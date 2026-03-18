@@ -1,6 +1,6 @@
 import io
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from flask import (
@@ -21,6 +21,10 @@ from ..models import (
     JOB_CATEGORY_COURSE,
     JOB_CATEGORY_PERSONAL,
     JOB_CATEGORY_RESEARCH,
+    PRINT_STATUS_FAILED,
+    PRINT_STATUS_MANUAL,
+    PRINT_STATUS_NOT_REQUESTED,
+    PRINT_STATUS_QUEUED,
     PrintJob,
 )
 from ..services.label_printer import build_qr_image, create_and_print_label
@@ -28,6 +32,7 @@ from ..services.library_hours import check_is_open
 from ..services.qr_links import build_staff_completion_url
 from ..services.runtime_settings import get_operational_settings
 from ..services.sheets_sync import sync_job_to_google_sheet
+from ..services.spaces import get_default_space, get_space, get_space_label_prefix
 
 bp = Blueprint("patron", __name__, url_prefix="/patron")
 NCSU_EMAIL_DOMAIN = "ncsu.edu"
@@ -46,7 +51,7 @@ def build_label_kwargs(job) -> dict:
     duplicating ~15 config/settings lookups.
     """
     operational_settings = get_operational_settings()
-    completion_url = build_staff_completion_url(job.label_code)
+    completion_url = build_staff_completion_url(job.label_code, space_slug=job.space_slug)
     return dict(
         job=job,
         completion_url=completion_url,
@@ -68,13 +73,13 @@ def build_label_kwargs(job) -> dict:
     )
 
 
-def _generate_label_code() -> str:
+def _generate_label_code(space_slug: str | None = None) -> str:
     # Format: <PREFIX>-MM-DD-YY-XXX
     # PREFIX defaults to "PT" but can be overridden via SITE_ID to avoid
     # collisions when multiple Pis sync to the same Google Sheet.
     # XXX is the sequential print number for that day.
     site_id = current_app.config.get("SITE_ID", "").strip().upper()
-    prefix = site_id if site_id else "PT"
+    prefix = get_space_label_prefix(space_slug) or site_id or "PT"
     date_part = datetime.now().strftime("%m-%d-%y")
     code_prefix = f"{prefix}-{date_part}-"
     existing = (
@@ -125,9 +130,33 @@ def _normalize_single_line(raw_value: str) -> str:
     return " ".join(raw_value.strip().split())
 
 
+def _selected_space_or_404(space_slug: str | None):
+    selected_space = get_space(space_slug)
+    if not selected_space:
+        abort(404)
+    return selected_space
+
+
+def _render_registration_template(*, form: dict, makerspace_is_open: bool, closed_message: str, selected_space: dict):
+    return render_template(
+        "patron_register.html",
+        form=form,
+        category_options=CATEGORY_OPTIONS,
+        ncsu_domain=NCSU_EMAIL_DOMAIN,
+        makerspace_is_open=makerspace_is_open,
+        closed_message=closed_message,
+        selected_space=selected_space,
+    )
+
+
 @bp.route("/register", methods=["GET", "POST"])
 @limiter.limit("20/minute")
 def register():
+    return handle_registration(None)
+
+
+def handle_registration(space_slug: str | None):
+    selected_space = _selected_space_or_404(space_slug)
     form = {
         "file_name": "",
         "first_name": "",
@@ -158,13 +187,11 @@ def register():
     if request.method == "POST":
         if not makerspace_is_open:
             flash(closed_message or "The Makerspace is currently closed.", "error")
-            return render_template(
-                "patron_register.html",
+            return _render_registration_template(
                 form=form,
-                category_options=CATEGORY_OPTIONS,
-                ncsu_domain=NCSU_EMAIL_DOMAIN,
                 makerspace_is_open=makerspace_is_open,
                 closed_message=closed_message,
+                selected_space=selected_space,
             )
 
         form.update({key: request.form.get(key, "").strip() for key in form})
@@ -215,30 +242,34 @@ def register():
         if errors:
             for error in errors:
                 flash(error, "error")
-            return render_template(
-                "patron_register.html",
+            return _render_registration_template(
                 form=form,
-                category_options=CATEGORY_OPTIONS,
-                ncsu_domain=NCSU_EMAIL_DOMAIN,
                 makerspace_is_open=makerspace_is_open,
                 closed_message=closed_message,
+                selected_space=selected_space,
             )
 
         full_name = f"{form['first_name']} {form['last_name']}".strip()
 
         job = PrintJob(
-            label_code=_generate_label_code(),
+            label_code=_generate_label_code(selected_space["slug"]),
             print_title=form["file_name"],
             user_name=full_name,
             user_email=user_email,
-            printer_name=current_app.config["DEFAULT_PRINTER_NAME"],
+            printer_name=selected_space["printer_name"],
+            space_slug=selected_space["slug"],
             category=form["category"],
             course_number=form["course_number"] or None,
             instructor=form["instructor"] or None,
             department=form["department"] or None,
             pi_name=form["pi_name"] or None,
-            location=current_app.config["DEFAULT_PRINTER_NAME"],
+            location=selected_space["display_name"],
             notes=None,
+            print_status=(
+                PRINT_STATUS_QUEUED
+                if current_app.config.get("WORKER_DISPATCH_ENABLED")
+                else PRINT_STATUS_NOT_REQUESTED
+            ),
         )
         db.session.add(job)
         db.session.commit()
@@ -251,22 +282,41 @@ def register():
                 sync_error,
             )
 
-        label_result = create_and_print_label(**build_label_kwargs(job))
+        if current_app.config.get("WORKER_DISPATCH_ENABLED"):
+            label_result = {
+                "printed": False,
+                "image_path": None,
+                "message": "Queued for remote printer dispatch.",
+                "queued": True,
+            }
+        else:
+            label_result = create_and_print_label(**build_label_kwargs(job))
+            if label_result.get("printed"):
+                job.mark_printed()
+            elif label_result.get("image_path"):
+                job.print_status = PRINT_STATUS_MANUAL
+                job.print_error = label_result.get("message")
+                job.manual_fallback_required = True
+            else:
+                job.print_status = PRINT_STATUS_FAILED
+                job.print_error = label_result.get("message")
+                job.manual_fallback_required = True
+            db.session.commit()
 
         return render_template(
             "patron_success.html",
             job=job,
             label_result=label_result,
             sync_error=sync_error if not sync_ok else None,
+            selected_space=selected_space,
+            reset_url=url_for("spaces.register_space", space_slug=selected_space["slug"]),
         )
 
-    return render_template(
-        "patron_register.html",
+    return _render_registration_template(
         form=form,
-        category_options=CATEGORY_OPTIONS,
-        ncsu_domain=NCSU_EMAIL_DOMAIN,
         makerspace_is_open=makerspace_is_open,
         closed_message=closed_message,
+        selected_space=selected_space,
     )
 
 
@@ -274,7 +324,7 @@ def register():
 def qr_code_image(label_code: str):
     job = PrintJob.query.filter_by(label_code=label_code.upper()).first_or_404()
     operational_settings = get_operational_settings()
-    completion_url = build_staff_completion_url(job.label_code)
+    completion_url = build_staff_completion_url(job.label_code, space_slug=job.space_slug)
     payload = (
         completion_url
         if operational_settings["qr_payload_mode"] == "url"
