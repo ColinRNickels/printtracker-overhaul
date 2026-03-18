@@ -39,13 +39,11 @@ def _space_display_lookup() -> dict[str, str]:
 
 
 def _worker_registry_rows() -> list[dict[str, object]]:
-    workers = (
-        WorkerNode.query.order_by(
-            WorkerNode.is_active.desc(),
-            WorkerNode.space_slug.asc(),
-            WorkerNode.display_name.asc(),
-        ).all()
-    )
+    workers = WorkerNode.query.order_by(
+        WorkerNode.is_active.desc(),
+        WorkerNode.space_slug.asc(),
+        WorkerNode.display_name.asc(),
+    ).all()
     now = datetime.now(timezone.utc)
     space_display_lookup = _space_display_lookup()
     rows = []
