@@ -5,7 +5,9 @@ from urllib.parse import urljoin
 from flask import current_app, has_request_context, request
 
 
-def build_staff_completion_url(label_code: str, *, space_slug: str | None = None) -> str:
+def build_staff_completion_url(
+    label_code: str, *, space_slug: str | None = None
+) -> str:
     safe_code = label_code.strip().upper()
     if space_slug:
         relative_path = f"/{space_slug}/staff/s/{safe_code}"

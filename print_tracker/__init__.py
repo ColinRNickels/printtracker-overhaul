@@ -69,9 +69,7 @@ def _apply_schema_upgrades() -> None:
             "ALTER TABLE print_jobs ADD COLUMN print_attempts INTEGER DEFAULT 0"
         )
     if "print_error" not in existing_columns:
-        upgrade_statements.append(
-            "ALTER TABLE print_jobs ADD COLUMN print_error TEXT"
-        )
+        upgrade_statements.append("ALTER TABLE print_jobs ADD COLUMN print_error TEXT")
     if "manual_fallback_required" not in existing_columns:
         upgrade_statements.append(
             "ALTER TABLE print_jobs ADD COLUMN manual_fallback_required BOOLEAN DEFAULT FALSE"

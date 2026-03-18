@@ -43,8 +43,14 @@ def _space_records_from_string(raw_value: str | None) -> list[dict[str, str]]:
             continue
         parts = [part.strip() for part in item.split("|")]
         slug = normalize_space_slug(parts[0] if len(parts) > 0 else "")
-        display_name = parts[1] if len(parts) > 1 and parts[1] else slug.replace("-", " ").title()
-        label_prefix = (parts[2] if len(parts) > 2 and parts[2] else display_name[:2]).strip().upper()
+        display_name = (
+            parts[1] if len(parts) > 1 and parts[1] else slug.replace("-", " ").title()
+        )
+        label_prefix = (
+            (parts[2] if len(parts) > 2 and parts[2] else display_name[:2])
+            .strip()
+            .upper()
+        )
         printer_name = parts[3] if len(parts) > 3 and parts[3] else display_name
         if not slug:
             continue

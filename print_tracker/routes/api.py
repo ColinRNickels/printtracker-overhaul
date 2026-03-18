@@ -136,9 +136,11 @@ def heartbeat():
             "ok": True,
             "agent_id": worker.agent_id,
             "space_slug": worker.space_slug,
-            "last_heartbeat_at": worker.last_heartbeat_at.isoformat()
-            if worker.last_heartbeat_at
-            else None,
+            "last_heartbeat_at": (
+                worker.last_heartbeat_at.isoformat()
+                if worker.last_heartbeat_at
+                else None
+            ),
         }
     )
 
@@ -183,12 +185,16 @@ def mark_job_printed(label_code: str):
         return _json_error("Authentication required.", 401)
 
     job = PrintJob.query.filter_by(label_code=label_code.upper()).first()
-    if not job or normalize_space_slug(job.space_slug) != normalize_space_slug(worker.space_slug):
+    if not job or normalize_space_slug(job.space_slug) != normalize_space_slug(
+        worker.space_slug
+    ):
         return _json_error("Job not found for this worker.", 404)
 
     job.mark_printed(worker_id=worker.id)
     db.session.commit()
-    return jsonify({"ok": True, "label_code": job.label_code, "print_status": job.print_status})
+    return jsonify(
+        {"ok": True, "label_code": job.label_code, "print_status": job.print_status}
+    )
 
 
 @bp.post("/agents/jobs/<label_code>/failed")
@@ -199,7 +205,9 @@ def mark_job_print_failed(label_code: str):
 
     payload = _request_json()
     job = PrintJob.query.filter_by(label_code=label_code.upper()).first()
-    if not job or normalize_space_slug(job.space_slug) != normalize_space_slug(worker.space_slug):
+    if not job or normalize_space_slug(job.space_slug) != normalize_space_slug(
+        worker.space_slug
+    ):
         return _json_error("Job not found for this worker.", 404)
 
     error_message = (payload.get("error") or "Print agent reported a failure.").strip()

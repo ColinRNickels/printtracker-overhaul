@@ -1,335 +1,264 @@
-# Print Tracker Handoff
+# Print Tracker Overhaul Handoff
 
 ## Snapshot
 
-- Date: 2026-03-13
+- Date: 2026-03-18
 - Repo: `/Users/crnickel/Dev/Print Tracker`
-- Remote: `https://github.com/ColinRNickels/printtracker.git`
-- Python: 3.12+ with venv at `.venv/`
+- Current commit: `ec28aa0`
+- Overhaul remote: `https://github.com/ColinRNickels/printtracker-overhaul.git`
+- Upstream reference remote: `https://github.com/ColinRNickels/printtracker.git`
+- Branch workflow: local `main` tracks `origin/main`
+- Python: project venv at `.venv/`
 
-## Product Summary
+## Current Goal
 
-Flask-based 3D-print tracking system for NC State University Libraries
-makerspaces (Makerspace and Maker Studio). Phone-first design — patrons
-register prints on their own phones via a QR code poster, and staff
-complete jobs by scanning the label QR from their phones.
+This repo is now the hard-forked overhaul proof of concept for a split
+architecture:
 
-Data lives in SQLite (fast local operations, WAL mode) with Google Sheets
-as the durable external record. Email notifications go through the Gmail
-API (with SMTP fallback). A Cloudflare named tunnel provides public HTTPS
-with a permanent hostname so students on campus Wi-Fi can reach the Pi
-without IT involvement. go.ncsu.edu short links give each location a
-stable, memorable URL.
+1. Central server handles intake, staff UI, reporting, and central job state.
+2. Raspberry Pi agents handle local label printing only.
+3. Space-based routing is path-first from the beginning:
+   - `/makerspace`
+   - `/maker-studio`
 
-## Project Goals
+The current milestone is complete enough to prove the server/agent contract
+locally. The next milestone is better operator visibility and control from
+the server UI.
 
-1. **Replace paper-based print tracking** — eliminate the hand-written
-   sign-up sheets and sticky notes currently used to manage 3D-print
-   queues in the makerspaces.
-2. **Self-service patron registration** — let patrons register their own
-   prints from their phones so staff don't have to be present at every
-   printer when a job starts.
-3. **Automated patron notification** — email patrons when their print is
-   finished (or failed) so they know when to pick it up, reducing foot
-   traffic and "is my print done?" questions at the desk.
-4. **Durable record in Google Sheets** — sync every print to a shared
-   Google Sheet that staff and administrators can browse, filter, and
-   export without touching the app.
-5. **Zero IT dependency** — run the entire system on a Raspberry Pi with
-   a Cloudflare tunnel so the Libraries can deploy and iterate without
-   waiting on university IT for servers, DNS, or firewall changes.
-6. **Multi-location readiness** — support both the Makerspace and Maker
-   Studio (and future spaces) with per-location Pis today, and a path to
-   a centralized server later.
-7. **Reporting and accountability** — provide monthly usage reports with
-   charts and CSV exports so the makerspaces can justify funding, track
-   trends, and report to administrators.
+## What Is Implemented
 
-## Architecture
+### Hard-fork repo setup
 
-### MVP: Pi-only with Cloudflare Tunnel
+- GitHub cannot create a true fork under the same owner as the original repo,
+  so a separate repo was created instead:
+  `ColinRNickels/printtracker-overhaul`
+- Remotes are now:
+  - `origin` -> overhaul repo
+  - `upstream` -> original repo
 
-```
-Student phone (campus Wi-Fi)
-        │  HTTPS
-        ▼
-┌──────────────────────────────┐
-│  go.ncsu.edu/makerspace-…   │  ← stable short link
-│  → hill-print.howcanthis.be  │  ← Cloudflare named tunnel
-│     hunt-print.howcanthis.be │
-└──────────┬───────────────────┘
-           │  localhost:5000
-           ▼
-┌──────────────────────────────┐
-│  Raspberry Pi                │
-│  Flask + gunicorn (systemd)  │
-│  SQLite (WAL mode)           │
-│  CUPS → Brother QL-800       │
-│  Gmail API + Sheets sync     │
-└──────────────────────────────┘
-```
+### Server/agent proof-of-concept foundation
 
-Each makerspace location runs its own Pi + named tunnel. The campus
-network has client isolation enabled, so direct Pi-to-phone routing is
-not possible without the tunnel.
+- Added space-aware server routing:
+  - `/<space_slug>`
+  - `/<space_slug>/register`
+  - `/<space_slug>/staff`
+  - `/<space_slug>/staff/s/<label_code>`
+- Added worker registration and polling API:
+  - `POST /api/agents/register`
+  - `POST /api/agents/heartbeat`
+  - `GET /api/agents/jobs`
+  - `POST /api/agents/jobs/<label_code>/printed`
+  - `POST /api/agents/jobs/<label_code>/failed`
+- Added worker model + print-dispatch state to `PrintJob`
+- Added local Docker assets and local Pi worker script
 
-Domain: `howcanthis.be` (Cloudflare-managed DNS)
-- `hill-print.howcanthis.be` → Hill Library Pi
-- `hunt-print.howcanthis.be` → Hunt Library Pi
+### Pi worker and installer
 
-Systemd services:
-- `print-tracker` — gunicorn on `0.0.0.0:5000`
-- `cloudflared` — named tunnel via `/etc/cloudflared/config.yml`
+- Added `scripts/pi_worker.py`
+- Added `scripts/install_pi_agent.sh`
+- Added `.env.pi-agent.example`
 
-### Future: server + Pi print relays
+The worker:
 
-Flask app moves to a university server. Each Pi becomes a lightweight
-print agent that polls the server for pending labels. A location picker
-replaces the per-Pi config. One instance, one URL, one Google Sheet.
+1. registers with the server using a bootstrap key
+2. polls for jobs only in its assigned space
+3. prints locally via CUPS / Brother queue
+4. reports success or failure back to the server
 
-## App Structure
+### Space slug compatibility fix
 
-### Startup
+The server now accepts more flexible space values during agent registration.
+These forms were verified to register successfully:
 
-- `run.py` → `create_app()` in `print_tracker/__init__.py`
-- Loads `.env`, normalizes paths (DB URI, label dir, logo path)
-- Creates DB tables + runs `_apply_schema_upgrades()` (adds missing
-  `department`, `pi_name`, `location` columns)
-- SQLite WAL mode enabled on every connection via `engine.connect()` event
+- `makerspace`
+- `maker-studio`
+- `maker studio`
+- `maker_studio`
+- `Maker Studio`
 
-### Data model (`print_tracker/models.py`)
+This fix is included in commit `ec28aa0`.
 
-**PrintJob** fields:
-- `label_code` (unique, indexed) — format `{SITE_ID}-YYYYMMDD-HHMMSS-##`
-- Patron: `user_name`, `user_email`, `print_title`
-- Category: `personal_project` | `course_assignment` | `university_research`
-  - Course-specific: `course_number`, `instructor`
-  - Research-specific: `department`, `pi_name`
-- Location: `location`, `printer_name` (both from `DEFAULT_PRINTER_NAME`)
-- Status: `in_progress` → `finished` | `failed`
-- Timestamps: `created_at`, `completed_at`, `email_sent_at` (all TZ-aware UTC)
-- Completion: `completed_by`, `completion_notes`
-- Email: `email_status` (`not_attempted`/`sent`/`failed`/`skipped`), `email_error`
-- Other: `notes`, `estimated_minutes`
+## Current Runtime State
 
-**AppSetting** — runtime key/value toggles (no restart needed):
-- `completion_email_enabled`, `save_label_files`, `label_retention_days`,
-  `qr_payload_mode`
+### Local server
 
-### Routes
+The server has been run locally from the venv on port `5050` for testing.
 
-| Blueprint | Prefix | File | Purpose |
-|-----------|--------|------|---------|
-| `patron` | `/patron` | `routes/patron.py` | Registration form, QR images, label preview |
-| `staff` | `/staff` | `routes/staff.py` | Login, dashboard, scan, completion, reprint, settings |
-| `reports` | `/reports` | `routes/reports.py` | Monthly report page + CSV export |
+Important local environment used during testing:
 
-Key route details:
-- `GET /` redirects to `/patron/register`
-- `GET /kiosk/*` 301-redirects to `/patron/*` (backward compat for old QR codes)
-- `POST /staff/login` rate-limited (10/min via Flask-Limiter)
-- `GET /staff/s/<code>` — short scan route (redirects to completion page)
-- `POST /staff/scan` — extracts label code from full URL or bare input
-- Staff auth via session cookie; before-request hook redirects to login
+- `WORKER_DISPATCH_ENABLED=true`
+- `LIBRARY_HOURS_ENFORCE=false`
+- `PORT=5050`
+- `AGENT_BOOTSTRAP_KEY=poc-bootstrap-key`
+- `KIOSK_BASE_URL=http://10.154.37.225:5050`
 
-### Services
+Test URLs used:
 
-| Module | Purpose |
-|--------|---------|
-| `label_printer.py` | PIL label rendering + CUPS print; `cleanup_saved_labels()` by retention age |
-| `runtime_settings.py` | Read/write `AppSetting` toggles; `get_bool_setting()`, `get_int_setting()`, `get_choice_setting()` |
-| `notifier.py` | Email via Gmail API / SMTP / auto-fallback; HTML+plaintext templates with embedded logo |
-| `google_api.py` | `build_google_service()` — refresh-token OAuth for Gmail + Sheets |
-| `sheets_sync.py` | Append/update rows in Google Sheets (21-column schema, auto-headers, upsert by PrintID) |
-| `reports.py` | `build_monthly_summary()`, chart datasets (trend, pie, department bar) |
-| `qr_links.py` | `build_staff_completion_url()` using `KIOSK_BASE_URL` or request context |
+- `http://10.154.37.225:5050/makerspace`
+- `http://10.154.37.225:5050/maker-studio`
 
-### Templates
+Note: Docker Compose was installed, but the actual server testing in this
+session used direct `python run.py` startup rather than a live compose stack.
 
-| File | Surface |
-|------|---------|
-| `base.html` | Shared layout — nav hidden on patron routes |
-| `patron_register.html` | Patron registration form (conditional course/research fields) |
-| `patron_success.html` | Post-registration success with physical next steps, 10 s auto-return |
-| `staff_login.html` | Password gate |
-| `staff_dashboard.html` | In-progress + completed job cards, settings form, QR mode warning |
-| `staff_complete.html` | Mark Finished / Failed (inline confirm, failure notes required) |
-| `reports_monthly.html` | Month picker, 4 Chart.js charts, summary stats, CSV export |
-| `email_success.*` / `email_failure.*` | `.html` + `.txt` notification templates |
+### Pilot Pi
 
-### CSS (`print_tracker/static/app.css`)
+Host used for SSH during testing:
 
-Mobile-first responsive design:
-- Base styles = phone portrait (single-column, 48 px+ touch targets)
-- `@media (min-width: 768px)` = laptop (two-column grids, three-column
-  type cards, 12-column chart grid)
+- `Printer-Kiosk2`
 
-## Config (`print_tracker/config.py`)
+Observed Pi state:
 
-All configuration via environment variables loaded from `.env`.  
-Reference: `.env.example` (36 variables).
+- CUPS queue exists: `QL-800`
+- `print-tracker-agent` systemd service is active
+- Pi agent successfully registered after the slug normalization fix
+- Pi was configured for Maker Studio, not Makerspace
 
-| Variable | Default | Notes |
-|----------|---------|-------|
-| `SECRET_KEY` | `change-me` | Flask session key |
-| `DATABASE_URL` | `sqlite:///instance/print_tracker.db` | |
-| `STAFF_PASSWORD` | `staffpw` | Hashed at startup |
-| `LABEL_PRINT_MODE` | `mock` | `mock` or `cups` |
-| `LABEL_PRINTER_QUEUE` | (empty) | CUPS queue name e.g. `QL800` |
-| `LABEL_OUTPUT_DIR` | `labels` | Saved label PNGs |
-| `KIOSK_BASE_URL` | `http://localhost:5000` | Public URL for QR payloads; auto-updated by tunnel script |
-| `LABEL_STOCK` | `DK1202` | Brother label stock |
-| `LABEL_DPI` | `300` | |
-| `LABEL_ORIENTATION` | `landscape` | |
-| `LABEL_QR_PAYLOAD_MODE` | `url` | `url` (full link) or `id` (bare code) |
-| `LABEL_QR_SIZE_INCH` | `1.0` | |
-| `LABEL_BRAND_TEXT` | `NC State University Libraries Makerspace` | |
-| `LABEL_BRAND_LOGO_PATH` | (empty) | Optional PNG; auto-converted to 1-bit |
-| `LABEL_SIDE_ART_PATH` | `assets/noun-3d-printer-8112508.svg` | Optional background watermark image (PNG/SVG) |
-| `LABEL_CUPS_MEDIA` | `DK-1202` | |
-| `LABEL_CUPS_EXTRA_OPTIONS` | (empty) | |
-| `LABEL_SAVE_LABEL_FILES` | `true` | |
-| `LIBRARY_HOURS_ENFORCE` | `true` | Block patron registration when closed |
-| `LIBRARY_HOURS_LIBRARY_SHORT_NAME` | `hill` | Hours API library selector |
-| `LIBRARY_HOURS_SERVICE_SHORT_NAME` | `makerspace` | Hours API service selector |
-| `LIBRARY_HOURS_POST_CLOSE_BUFFER_MINUTES` | `10` | Grace period after close |
-| `EMAIL_PROVIDER` | `smtp` | `smtp`, `gmail_api`, or `auto` |
-| `SMTP_HOST`…`SMTP_FROM_ADDRESS` | | Standard SMTP settings |
-| `GOOGLE_OAUTH_CLIENT_ID` | | OAuth 2.0 credentials |
-| `GOOGLE_OAUTH_CLIENT_SECRET` | | |
-| `GOOGLE_OAUTH_REFRESH_TOKEN` | | From bootstrap script |
-| `GOOGLE_OAUTH_TOKEN_URI` | `https://oauth2.googleapis.com/token` | |
-| `GOOGLE_GMAIL_SENDER` | | Gmail sending address |
-| `GOOGLE_SHEETS_SYNC_ENABLED` | `false` | |
-| `GOOGLE_SHEETS_SPREADSHEET_ID` | | Accepts full URL or bare ID |
-| `GOOGLE_SHEETS_WORKSHEET` | `PrintJobs` | |
-| `DEFAULT_PRINTER_NAME` | `Makerspace` | Location name in Sheets + labels |
-| `SITE_ID` | (empty) | 2–4 letter prefix for label codes (e.g. `HL`, `HU`; default `PT`) |
-| `TUNNEL_HOSTNAME` | (empty) | Permanent tunnel hostname (e.g. `hill-print.howcanthis.be`) |
-| `GO_NCSU_API_TOKEN` | | API token for go.ncsu.edu |
-| `GO_NCSU_LINK_SLUG` | `makerspace-print-label` | Short link slug |
+Pi-side configuration observed:
 
-Session cookies: `Secure`, `HttpOnly`, `SameSite=Lax`.
+- `SERVER_BASE_URL=http://10.154.37.225:5050`
+- `AGENT_ID=maker-studio-pi-01`
+- `AGENT_SPACE_SLUG=makerstudio`
+- `LABEL_PRINTER_QUEUE=QL-800`
 
-## Google Sheets Sync
+Key debugging finding:
 
-- Sync on both registration and completion (upsert by PrintID)
-- Headers (21 columns): PrintID, CreatedAt, CompletedAt, Status,
-  StatusLabel, ProjectType, ProjectTypeLabel, FileName, UserName,
-  UserEmail, CourseNumber, Instructor, Department, PI, CompletedBy,
-  CompletionNotes, EmailStatus, EmailError, EmailSentAt, PrinterName,
-  **Location**
-- Location value comes from `DEFAULT_PRINTER_NAME` config
-- Sheet and headers are created automatically on first sync
+- Jobs queued under `makerspace` will not print on this Pi because the Pi is
+  intentionally assigned to `maker-studio`.
+- This was not a print transport bug. It was a correct space-routing behavior.
 
-## Deploy
+The user confirmed the corrected path-based routing behavior works.
 
-### Pi deploy
+## Files Changed For The Overhaul
+
+Core files added or changed in this phase:
+
+- `print_tracker/models.py`
+- `print_tracker/config.py`
+- `print_tracker/__init__.py`
+- `print_tracker/routes/patron.py`
+- `print_tracker/routes/api.py`
+- `print_tracker/routes/spaces.py`
+- `print_tracker/services/qr_links.py`
+- `print_tracker/services/spaces.py`
+- `print_tracker/templates/base.html`
+- `print_tracker/templates/patron_register.html`
+- `print_tracker/templates/patron_success.html`
+- `print_tracker/templates/staff_dashboard.html`
+- `scripts/pi_worker.py`
+- `scripts/install_pi_agent.sh`
+- `Dockerfile`
+- `docker-compose.yml`
+- `.env.pi-agent.example`
+
+## Validation Completed
+
+1. Flask app boots with the new route structure.
+2. PostgreSQL-safe startup fix was added so SQLite WAL setup does not run on
+   non-SQLite connections.
+3. Worker registration and polling API were validated with the Flask test client.
+4. Local server served `/makerspace` and `/maker-studio` successfully.
+5. Pi agent service on `Printer-Kiosk2` runs successfully.
+6. CUPS queue `QL-800` exists and is idle/enabled on the Pi.
+7. Registration error due to space slug mismatch was fixed and pushed.
+
+## Current Gaps
+
+These are the main missing pieces after the first POC slice:
+
+1. Staff dashboard does not yet show agent online/offline status per space.
+2. Staff dashboard does not surface queued/dispatched/printed/manual-fallback
+   state cleanly for the server/agent model.
+3. There is no admin view for worker registry entries.
+4. There is no visible per-space queue summary for operators.
+5. Patron-facing failure handling is not finalized when label printing fails.
+   The success/failure screen must keep the Print ID visible, must not auto-return
+   to the submit screen in the failed-label case, and must explicitly instruct the
+   user to talk to staff to get a print slip.
+6. Docker Compose startup has not yet been used as the primary runtime path.
+7. The server still uses the existing shared staff-password model.
+
+## Recommended Next Step
+
+The next engineering step should be server-side operator visibility.
+
+Implement this in the next session:
+
+1. Add worker status summaries to the staff dashboard.
+   Show each configured space, last heartbeat, assigned printer queue,
+   and whether an agent is online.
+2. Add per-space queue summaries.
+   Show counts for queued, dispatched, printed, and manual-fallback jobs.
+3. Make queued jobs visibly attributable to their target space and worker.
+4. Add a small troubleshooting surface for operators.
+   At minimum: latest print error and whether the assigned worker is online.
+5. Update patron failed-label UX.
+   If a label does not print, the screen must keep the Print ID on screen,
+   must not revert automatically to the registration form, and must tell the
+   user to talk to staff to get a print slip.
+
+This is the right next step because the proof-of-concept routing contract now
+works, but the system is still opaque from the UI.
+
+## Suggested Implementation Order
+
+1. Extend queries in `print_tracker/routes/staff.py` to load worker nodes and
+   grouped job counts by `space_slug` and `print_status`.
+2. Update `print_tracker/templates/staff_dashboard.html` to add:
+   - worker cards
+   - per-space queue counts
+   - print status badges on job cards
+3. Optionally add a helper service for worker health classification, for example
+   online vs stale based on `last_heartbeat_at`.
+4. After the UI changes, test with:
+   - one Pi online for `maker-studio`
+   - a queued `makerspace` job
+   - a queued `maker-studio` job
+   to confirm the dashboard makes the routing distinction obvious.
+5. Add a failed-label test.
+   Confirm that when printing fails, the patron screen keeps the Print ID visible,
+   does not auto-reset back to registration, and clearly instructs the patron to
+   talk to staff for a print slip.
+
+## Useful Commands
+
+### Local server
 
 ```bash
-./scripts/deploy_rpi.sh
+export WORKER_DISPATCH_ENABLED=true
+export LIBRARY_HOURS_ENFORCE=false
+export PORT=5050
+export AGENT_BOOTSTRAP_KEY=poc-bootstrap-key
+export KIOSK_BASE_URL=http://10.154.37.225:5050
+./.venv/bin/python run.py
 ```
 
-Interactive TUI wizard (~1 700 lines) with 8 steps:
-
-1. Staff password (prompted with confirmation)
-2. Linux service user/group/port
-3. Label printer mode (`cups`/`mock`) + CUPS queue + media
-4. Location name & Site ID
-5. Cloudflare named tunnel (optional — creds file path + hostname)
-6. go.ncsu.edu short link (optional)
-7. Google OAuth (optional — runs bootstrap flow)
-8. Review & confirm
-
-Non-interactive mode: `./scripts/deploy_rpi.sh --non-interactive`  
-Also accepts `--print-mode`, `--tunnel-creds-file PATH`,
-`--tunnel-hostname HOST`, `--no-ap`, `--no-kiosk-autostart`, etc.
-
-Installs: apt packages (`cups`, `printer-driver-ptouch`, `avahi-daemon`,
-`usbutils`, `cloudflared`), Python venv + requirements + gunicorn,
-generates `.env`, creates systemd units, optionally runs OAuth flow.
-
-Named tunnel setup (Step 5 / Section 9):
-- Prompts for tunnel credentials JSON file and hostname
-- Auto-detects creds on USB transfer drive (`/media/`), `/etc/cloudflared/`, or `~/.cloudflared/`
-- Copies creds to `/etc/cloudflared/tunnel-creds.json`
-- Writes `/etc/cloudflared/config.yml` with extracted TunnelID
-- Runs `cloudflared service install` and verifies the service
-- Cleans up any legacy `cloudflared-quick` service from MVP
-
-### Cloudflare Tunnel
-
-Named tunnels with permanent hostnames (replaces the MVP quick-tunnel
-approach). Each Pi has:
-
-- `/etc/cloudflared/config.yml` — tunnel ID, credentials path, ingress
-  rules routing the hostname to `http://localhost:5000`
-- `/etc/cloudflared/tunnel-creds.json` — tunnel credentials JSON
-- `cloudflared` systemd service (installed via `cloudflared service install`)
-
-The tunnel URL never changes, so `KIOSK_BASE_URL` in `.env` is set once
-at deploy time (`https://<hostname>`) and go.ncsu.edu only needs to be
-updated once.
-
-Legacy scripts (kept for dev/testing, no longer used in production):
-- `scripts/start_tunnel.sh` — quick tunnel manager (was `cloudflared-quick` service)
-- `scripts/get_tunnel_url.sh` — prints current URL from journalctl / .env
-
-Helper scripts:
-- `scripts/update_golink.sh` — manually update go.ncsu.edu link
-
-### Google OAuth bootstrap
-
-Run on a machine with a browser:
+### Pi checks
 
 ```bash
-python scripts/google_oauth_bootstrap.py \
-  --client-secrets ~/Downloads/client_secret.json \
-  --gmail-sender makerspace@ncsu.edu
+ssh Printer-Kiosk2 'systemctl status print-tracker-agent --no-pager --full'
+ssh Printer-Kiosk2 'journalctl -u print-tracker-agent -n 120 --no-pager'
+ssh Printer-Kiosk2 'lpstat -e; echo ---; lpstat -p -d'
+ssh Printer-Kiosk2 'grep -E "^(AGENT_ID|AGENT_SPACE_SLUG|SERVER_BASE_URL|LABEL_PRINTER_QUEUE)=" /home/hunt-print/printtracker-overhaul/.env.pi-agent'
 ```
 
-Copy the printed env values into the Pi's `.env`.
+### Git workflow
 
-## Key Design Decisions
+```bash
+git fetch upstream
+git log --oneline --decorate --max-count=5 origin/main
+git log --oneline --decorate --max-count=5 upstream/main
+```
 
-1. **Phone-first architecture** — Cloudflare Tunnel for HTTPS; responsive
-   mobile-first CSS; nav hidden on patron routes; card-based staff
-   dashboard; 48 px+ touch targets; `viewport-fit=cover` for notched phones.
+## Notes For The Next Session
 
-2. **Multi-location support** — `DEFAULT_PRINTER_NAME` doubles as
-   location name; `SITE_ID` prefixes label codes per site; `location`
-   column on `PrintJob` and in Sheets. MVP: one Pi per location.
-
-3. **go.ncsu.edu short links** — Named tunnels have permanent URLs, so
-   the go link only needs to be set once. Legacy quick-tunnel workflow
-   (`start_tunnel.sh`) auto-patched the go link on each restart.
-
-4. **SQLite WAL mode** — Enabled per-connection via SQLAlchemy event
-   listener for better concurrent read performance.
-
-5. **Timezone-aware datetimes** — All timestamps use
-   `datetime.now(timezone.utc)`.
-
-6. **DRY label printing** — `build_label_kwargs(job)` in `routes/patron.py`
-   shared between registration and reprint.
-
-7. **Email auto-fallback** — `EMAIL_PROVIDER=auto` tries Gmail API first,
-   falls back to SMTP.
-
-8. **Runtime settings in DB** — Staff can toggle email, label saving,
-   retention days, QR mode without restarting the app.
-
-9. **Schema migrations at startup** — `_apply_schema_upgrades()` adds
-   missing columns (`department`, `pi_name`, `location`) so upgrades
-   don't require manual SQL.
-
-10. **Security** — CSRF tokens (Flask-WTF), password hashing (Werkzeug),
-    session cookie hardening, rate limiting on login (Flask-Limiter),
-    NCSU email domain validation, path normalization.
-
-11. **Hours enforcement behavior** — Registration checks use NC local date
-   (`America/New_York`) to match the hours API date field; staff-authenticated
-   sessions bypass the restriction by design for assisted/testing workflows.
+1. Do not waste time re-debugging the Pi print failure from this session as a
+   transport problem unless a same-space job still fails.
+2. The key lesson from this round: the worker was healthy, but there was no UI
+   visibility into the fact that it was assigned to a different space than the
+   queued jobs.
+3. The next step is not more API plumbing. It is making dispatch state visible
+   and understandable to staff, plus making failed-label patron behavior safe
+   and unambiguous.
 
 6. **README rewrite**
    - Full deployment docs: Pi setup, Cloudflare Tunnel, Google OAuth

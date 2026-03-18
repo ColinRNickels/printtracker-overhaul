@@ -51,7 +51,9 @@ def build_label_kwargs(job) -> dict:
     duplicating ~15 config/settings lookups.
     """
     operational_settings = get_operational_settings()
-    completion_url = build_staff_completion_url(job.label_code, space_slug=job.space_slug)
+    completion_url = build_staff_completion_url(
+        job.label_code, space_slug=job.space_slug
+    )
     return dict(
         job=job,
         completion_url=completion_url,
@@ -82,14 +84,10 @@ def _generate_label_code(space_slug: str | None = None) -> str:
     prefix = get_space_label_prefix(space_slug) or site_id or "PT"
     date_part = datetime.now().strftime("%m-%d-%y")
     code_prefix = f"{prefix}-{date_part}-"
-    existing = (
-        PrintJob.query
-        .filter(PrintJob.label_code.like(f"{code_prefix}%"))
-        .all()
-    )
+    existing = PrintJob.query.filter(PrintJob.label_code.like(f"{code_prefix}%")).all()
     used_numbers = set()
     for job in existing:
-        suffix = job.label_code[len(code_prefix):]
+        suffix = job.label_code[len(code_prefix) :]
         try:
             used_numbers.add(int(suffix))
         except ValueError:
@@ -137,7 +135,9 @@ def _selected_space_or_404(space_slug: str | None):
     return selected_space
 
 
-def _render_registration_template(*, form: dict, makerspace_is_open: bool, closed_message: str, selected_space: dict):
+def _render_registration_template(
+    *, form: dict, makerspace_is_open: bool, closed_message: str, selected_space: dict
+):
     return render_template(
         "patron_register.html",
         form=form,
@@ -309,7 +309,9 @@ def handle_registration(space_slug: str | None):
             label_result=label_result,
             sync_error=sync_error if not sync_ok else None,
             selected_space=selected_space,
-            reset_url=url_for("spaces.register_space", space_slug=selected_space["slug"]),
+            reset_url=url_for(
+                "spaces.register_space", space_slug=selected_space["slug"]
+            ),
         )
 
     return _render_registration_template(
@@ -324,7 +326,9 @@ def handle_registration(space_slug: str | None):
 def qr_code_image(label_code: str):
     job = PrintJob.query.filter_by(label_code=label_code.upper()).first_or_404()
     operational_settings = get_operational_settings()
-    completion_url = build_staff_completion_url(job.label_code, space_slug=job.space_slug)
+    completion_url = build_staff_completion_url(
+        job.label_code, space_slug=job.space_slug
+    )
     payload = (
         completion_url
         if operational_settings["qr_payload_mode"] == "url"

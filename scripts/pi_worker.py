@@ -63,7 +63,9 @@ def _http_json(
     if headers:
         request_headers.update(headers)
 
-    req = request.Request(url, data=body, method=method.upper(), headers=request_headers)
+    req = request.Request(
+        url, data=body, method=method.upper(), headers=request_headers
+    )
     with request.urlopen(req, timeout=timeout) as response:
         response_body = response.read().decode("utf-8")
     if not response_body:
@@ -133,7 +135,9 @@ class JobPayload:
 
     @property
     def category_label(self) -> str:
-        return JOB_CATEGORY_LABELS.get(self.category, self.category.replace("_", " ").title())
+        return JOB_CATEGORY_LABELS.get(
+            self.category, self.category.replace("_", " ").title()
+        )
 
 
 def load_worker_config() -> WorkerConfig:
@@ -145,15 +149,26 @@ def load_worker_config() -> WorkerConfig:
     agent_id = (os.environ.get("AGENT_ID", "") or "").strip()
     bootstrap_key = (os.environ.get("AGENT_BOOTSTRAP_KEY", "") or "").strip()
     space_slug = (os.environ.get("AGENT_SPACE_SLUG", "") or "").strip().lower()
-    display_name = (os.environ.get("AGENT_DISPLAY_NAME", "") or agent_id).strip() or agent_id
+    display_name = (
+        os.environ.get("AGENT_DISPLAY_NAME", "") or agent_id
+    ).strip() or agent_id
     printer_queue = (os.environ.get("LABEL_PRINTER_QUEUE", "") or "").strip()
 
     if not server_base_url:
         raise RuntimeError("SERVER_BASE_URL is required.")
     if not agent_id:
         raise RuntimeError("AGENT_ID is required.")
-    if not bootstrap_key and not Path(os.environ.get("AGENT_TOKEN_FILE", PROJECT_ROOT / ".state" / "pi-agent.token")).exists():
-        raise RuntimeError("AGENT_BOOTSTRAP_KEY is required until the agent has registered.")
+    if (
+        not bootstrap_key
+        and not Path(
+            os.environ.get(
+                "AGENT_TOKEN_FILE", PROJECT_ROOT / ".state" / "pi-agent.token"
+            )
+        ).exists()
+    ):
+        raise RuntimeError(
+            "AGENT_BOOTSTRAP_KEY is required until the agent has registered."
+        )
     if not space_slug:
         raise RuntimeError("AGENT_SPACE_SLUG is required.")
 
@@ -164,18 +179,30 @@ def load_worker_config() -> WorkerConfig:
         space_slug=space_slug,
         display_name=display_name,
         printer_queue=printer_queue,
-        software_version=(os.environ.get("AGENT_SOFTWARE_VERSION", "poc") or "poc").strip(),
-        token_file=Path(os.environ.get("AGENT_TOKEN_FILE", PROJECT_ROOT / ".state" / "pi-agent.token")),
+        software_version=(
+            os.environ.get("AGENT_SOFTWARE_VERSION", "poc") or "poc"
+        ).strip(),
+        token_file=Path(
+            os.environ.get(
+                "AGENT_TOKEN_FILE", PROJECT_ROOT / ".state" / "pi-agent.token"
+            )
+        ),
         poll_interval_seconds=_env_int("AGENT_POLL_INTERVAL_SECONDS", 5, minimum=1),
-        heartbeat_interval_seconds=_env_int("AGENT_HEARTBEAT_INTERVAL_SECONDS", 30, minimum=5),
-        label_output_dir=os.environ.get("LABEL_OUTPUT_DIR", str(PROJECT_ROOT / "labels")),
+        heartbeat_interval_seconds=_env_int(
+            "AGENT_HEARTBEAT_INTERVAL_SECONDS", 30, minimum=5
+        ),
+        label_output_dir=os.environ.get(
+            "LABEL_OUTPUT_DIR", str(PROJECT_ROOT / "labels")
+        ),
         label_print_mode=os.environ.get("LABEL_PRINT_MODE", "cups"),
         label_stock=os.environ.get("LABEL_STOCK", "DK1202"),
         label_dpi=_env_int("LABEL_DPI", 300, minimum=72),
         qr_payload_mode=os.environ.get("LABEL_QR_PAYLOAD_MODE", "url"),
         label_qr_size_inch=float(os.environ.get("LABEL_QR_SIZE_INCH", "0.5")),
         label_orientation=os.environ.get("LABEL_ORIENTATION", "landscape"),
-        label_brand_text=os.environ.get("LABEL_BRAND_TEXT", "NC State University Libraries Makerspace"),
+        label_brand_text=os.environ.get(
+            "LABEL_BRAND_TEXT", "NC State University Libraries Makerspace"
+        ),
         label_brand_logo_path=os.environ.get("LABEL_BRAND_LOGO_PATH", ""),
         label_side_art_path=os.environ.get(
             "LABEL_SIDE_ART_PATH",
@@ -308,7 +335,10 @@ def run_worker_loop(config: WorkerConfig) -> None:
                     report_printed(config, label_code)
                     log.info("Printed %s", label_code)
                 else:
-                    message = result.get("message") or "Agent did not mark print as successful."
+                    message = (
+                        result.get("message")
+                        or "Agent did not mark print as successful."
+                    )
                     report_failed(config, label_code, message)
                     log.warning("Print failed for %s: %s", label_code, message)
             except Exception as exc:  # noqa: BLE001
