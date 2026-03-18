@@ -18,6 +18,7 @@
         <nav>
             <a href="{{ url_for('spaces.register_space', space_slug=default_space.slug) }}" {% if on_patron_route %}class="nav-active"{% endif %}>Register</a>
             <a href="{{ url_for('staff.dashboard') }}" {% if request.endpoint and request.endpoint.startswith('staff.') %}class="nav-active"{% endif %}>Staff</a>
+            <a href="{{ url_for('admin.dashboard') }}" {% if request.endpoint and request.endpoint.startswith('admin.') %}class="nav-active"{% endif %}>Admin</a>
             <a href="{{ url_for('reports.monthly') }}" {% if request.endpoint and request.endpoint.startswith('reports.') %}class="nav-active"{% endif %}>Reports</a>
         </nav>
         {% endif %}

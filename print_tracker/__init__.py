@@ -167,6 +167,7 @@ def create_app() -> Flask:
 
     from . import models  # noqa: F401
     from .routes.api import bp as api_bp
+    from .routes.admin import bp as admin_bp
     from .routes.patron import bp as patron_bp
     from .routes.reports import bp as reports_bp
     from .routes.spaces import bp as spaces_bp
@@ -181,6 +182,7 @@ def create_app() -> Flask:
     app.register_blueprint(spaces_bp)
     app.register_blueprint(patron_bp)
     app.register_blueprint(staff_bp)
+    app.register_blueprint(admin_bp)
     app.register_blueprint(reports_bp)
     app.register_blueprint(api_bp)
 

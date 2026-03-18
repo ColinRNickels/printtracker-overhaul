@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% block title %}Admin Dashboard — Print Tracker{% endblock %}
+{% block content %}
+<section class="panel">
+    <h2>Admin Dashboard</h2>
+    <p class="lead-line">Agent registry, queue visibility, and operational settings live here so the daily staff dashboard stays focused on opening and completing jobs.</p>
+</section>
+
+<section class="panel">
+    <h3>Operational Settings</h3>
+    <p>These settings apply immediately to this station.</p>
+    <form method="post" action="{{ url_for('admin.update_settings') }}" class="kiosk-compact-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label class="checkbox-row">
+            <input type="checkbox" name="completion_email_enabled" {% if operational_settings.completion_email_enabled %}checked{% endif %}>
+            Send completion emails
+        </label>
+        <label class="checkbox-row">
+            <input type="checkbox" name="save_label_files" {% if operational_settings.save_label_files %}checked{% endif %}>
+            Save label images for reprint
+        </label>
+        <label>
+            Keep label images for this many days
+            <input type="number" name="label_retention_days" min="1" max="30" value="{{ operational_settings.label_retention_days }}" required>
+        </label>
+        <p class="muted-line">QR links are always generated as staff page URLs for phone and iPad scanning.</p>
+        <p class="muted-line">Current email provider: <strong>{{ email_provider }}</strong></p>
+        <p class="muted-line">QR base URL: <strong>{{ kiosk_base_url or "not configured" }}</strong></p>
+        <p class="muted-line">Retention cleanup removes labels from yesterday or earlier when set to 1 day.</p>
+        {% if qr_link_url_warning %}
+            <p class="muted-line warning-line"><strong>Warning:</strong> QR links currently use localhost/127.0.0.1 and may not open on iPad/phone.</p>
+        {% endif %}
+        <div class="form-actions">
+            <button type="submit">Save Settings</button>
+        </div>
+    </form>
+</section>
+
+<section class="panel">
+    <div class="dashboard-summary" aria-label="Admin summary">
+        <div class="summary-chip">
+            <strong>{{ queue_totals.online_workers }}</strong>
+            <span>Online agents</span>
+        </div>
+        <div class="summary-chip">
+            <strong>{{ worker_registry|length }}</strong>
+            <span>Registered agents</span>
+        </div>
+        <div class="summary-chip">
+            <strong>{{ queue_totals.manual_fallback }}</strong>
+            <span>Manual fallback</span>
+        </div>
+        <div class="summary-chip">
+            <strong>{{ queue_totals.configured_spaces }}</strong>
+            <span>Configured spaces</span>
+        </div>
+    </div>
+</section>
+
+<section class="panel">
+    <h3>Space Status</h3>
+    <p class="lead-line">Old worker records remain in the registry until they are deactivated, so stale test registrations will keep showing up here until you archive them.</p>
+    <div class="space-status-grid">
+        {% for entry in space_dashboard %}
+        <article class="space-card">
+            <div class="space-card-header">
+                <div>
+                    <h4>{{ entry.space.display_name }}</h4>
+                    <p class="muted-line">Slug: {{ entry.space.slug }}</p>
+                </div>
+                <span class="health-badge health-{{ 'online' if entry.has_online_worker else 'offline' }}">
+                    {{ 'Agent Online' if entry.has_online_worker else 'No Online Agent' }}
+                </span>
+            </div>
+
+            <div class="space-queue-grid" aria-label="{{ entry.space.display_name }} queue summary">
+                <div class="summary-chip compact">
+                    <strong>{{ entry.queue_counts.queued }}</strong>
+                    <span>Queued</span>
+                </div>
+                <div class="summary-chip compact">
+                    <strong>{{ entry.queue_counts.dispatched }}</strong>
+                    <span>Dispatched</span>
+                </div>
+                <div class="summary-chip compact">
+                    <strong>{{ entry.queue_counts.printed }}</strong>
+                    <span>Printed</span>
+                </div>
+                <div class="summary-chip compact">
+                    <strong>{{ entry.queue_counts.manual_fallback }}</strong>
+                    <span>Manual fallback</span>
+                </div>
+            </div>
+
+            <div class="worker-list">
+                {% for row in entry.workers %}
+                <div class="worker-row">
+                    <div>
+                        <strong>{{ row.worker.display_name }}</strong>
+                        <p class="muted-line">{{ row.worker.agent_id }}</p>
+                    </div>
+                    <div class="worker-meta">
+                        <span class="health-badge health-{{ row.health.state }}">{{ row.health.label }}</span>
+                        <span class="muted-line">Queue: {{ row.worker.printer_queue or 'not set' }}</span>
+                        <span class="muted-line">Last heartbeat: {{ row.health.last_seen_text }}</span>
+                    </div>
+                </div>
+                {% else %}
+                <p class="muted-line">No active registered agent for this space.</p>
+                {% endfor %}
+            </div>
+
+            <div class="troubleshooting-card">
+                <strong>Troubleshooting</strong>
+                {% if entry.latest_error_job %}
+                    <p class="muted-line">Latest print issue: {{ entry.latest_error_job.label_code }}{% if entry.latest_error_job.assigned_worker %} via {{ entry.latest_error_job.assigned_worker.display_name }}{% endif %}</p>
+                    <p class="error-snippet">{{ entry.latest_error_job.print_error }}</p>
+                {% else %}
+                    <p class="muted-line">No active print errors for this space.</p>
+                {% endif %}
+            </div>
+        </article>
+        {% endfor %}
+    </div>
+</section>
+
+<section class="panel">
+    <h3>Worker Registry</h3>
+    <p class="lead-line">Deactivate stale test or retired agents to keep the registry clean. Reactivated agents will go back to pending until they heartbeat again.</p>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Agent</th>
+                    <th>Space</th>
+                    <th>Queue</th>
+                    <th>Health</th>
+                    <th>Last Heartbeat</th>
+                    <th>Version</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in worker_registry %}
+                <tr>
+                    <td>
+                        <strong>{{ row.worker.display_name }}</strong><br>
+                        <span class="muted-line">{{ row.worker.agent_id }}</span>
+                    </td>
+                    <td>{{ row.space_display }}</td>
+                    <td>{{ row.worker.printer_queue or 'not set' }}</td>
+                    <td><span class="health-badge health-{{ row.health.state }}">{{ row.health.label }}</span></td>
+                    <td>{{ row.health.last_seen_text }}</td>
+                    <td>{{ row.worker.software_version or 'unknown' }}</td>
+                    <td>
+                        <div class="inline-actions">
+                            <form method="post" action="{{ url_for('admin.update_worker_state', worker_id=row.worker.id) }}" class="inline-action">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                {% if row.worker.is_active %}
+                                    <input type="hidden" name="action" value="deactivate">
+                                    <button type="submit" class="button-link">Deactivate</button>
+                                {% else %}
+                                    <input type="hidden" name="action" value="activate">
+                                    <button type="submit" class="button-link">Reactivate</button>
+                                {% endif %}
+                            </form>
+                            <form method="post" action="{{ url_for('admin.delete_worker', worker_id=row.worker.id) }}" class="inline-action" onsubmit="return confirm('Remove this worker from the registry?');">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button type="submit" class="button-link button-danger">Remove</button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="7">No registered agents yet.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+{% endblock %}

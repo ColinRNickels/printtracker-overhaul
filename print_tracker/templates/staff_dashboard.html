@@ -10,16 +10,12 @@
             <span>Active jobs</span>
         </div>
         <div class="summary-chip">
-            <strong>{{ queue_totals.online_workers }}</strong>
-            <span>Online agents</span>
+            <strong>{{ recently_completed|length }}</strong>
+            <span>Recent completions</span>
         </div>
         <div class="summary-chip">
             <strong>{{ queue_totals.manual_fallback }}</strong>
             <span>Manual fallback</span>
-        </div>
-        <div class="summary-chip">
-            <strong>{{ operational_settings.qr_payload_mode|upper }}</strong>
-            <span>QR mode</span>
         </div>
     </div>
 
@@ -43,114 +39,28 @@
     </form>
 </section>
 
-<section class="panel">
-    <h3>Space Status</h3>
-    <p class="lead-line">Each space shows live agent health, print queue state, and the latest print issue staff may need to handle manually.</p>
-    <div class="space-status-grid">
-        {% for entry in space_dashboard %}
-        <article class="space-card">
-            <div class="space-card-header">
-                <div>
-                    <h4>{{ entry.space.display_name }}</h4>
-                    <p class="muted-line">Slug: {{ entry.space.slug }}</p>
-                </div>
-                <span class="health-badge health-{{ 'online' if entry.has_online_worker else 'offline' }}">
-                    {{ 'Agent Online' if entry.has_online_worker else 'No Online Agent' }}
-                </span>
+{% if orphaned_queue_jobs %}
+<section class="panel queue-alert-panel" aria-live="polite">
+    <h3>Action Needed: Jobs Waiting With No Worker</h3>
+    <p class="lead-line warning-line">These jobs are queued, but no active worker is assigned for their space. Print IDs are listed so staff can create slips manually.</p>
+    <div class="queue-alert-list">
+        {% for job in orphaned_queue_jobs %}
+        <div class="queue-alert-item">
+            <div class="queue-alert-meta">
+                <strong class="queue-alert-id">Print ID: {{ job.label_code }}</strong>
+                <span class="job-card-file">{{ job.file_name }}</span>
+                <span class="job-card-meta">{{ space_display_lookup.get(job.space_slug, job.space_slug or 'Unassigned space') }}</span>
+                <span class="job-card-meta">Current status: {{ job.print_status_label }}</span>
             </div>
-
-            <div class="space-queue-grid" aria-label="{{ entry.space.display_name }} queue summary">
-                <div class="summary-chip compact">
-                    <strong>{{ entry.queue_counts.queued }}</strong>
-                    <span>Queued</span>
-                </div>
-                <div class="summary-chip compact">
-                    <strong>{{ entry.queue_counts.dispatched }}</strong>
-                    <span>Dispatched</span>
-                </div>
-                <div class="summary-chip compact">
-                    <strong>{{ entry.queue_counts.printed }}</strong>
-                    <span>Printed</span>
-                </div>
-                <div class="summary-chip compact">
-                    <strong>{{ entry.queue_counts.manual_fallback }}</strong>
-                    <span>Manual fallback</span>
-                </div>
-            </div>
-
-            <div class="worker-list">
-                {% for row in entry.workers %}
-                <div class="worker-row">
-                    <div>
-                        <strong>{{ row.worker.display_name }}</strong>
-                        <p class="muted-line">{{ row.worker.agent_id }}</p>
-                    </div>
-                    <div class="worker-meta">
-                        <span class="health-badge health-{{ row.health.state }}">{{ row.health.label }}</span>
-                        <span class="muted-line">Queue: {{ row.worker.printer_queue or 'not set' }}</span>
-                        <span class="muted-line">Last heartbeat: {{ row.health.last_seen_text }}</span>
-                    </div>
-                </div>
-                {% else %}
-                <p class="muted-line">No registered agent for this space yet.</p>
-                {% endfor %}
-            </div>
-
-            <div class="troubleshooting-card">
-                <strong>Troubleshooting</strong>
-                {% if entry.latest_error_job %}
-                    <p class="muted-line">Latest print issue: {{ entry.latest_error_job.label_code }}{% if entry.latest_error_job.assigned_worker %} via {{ entry.latest_error_job.assigned_worker.display_name }}{% endif %}</p>
-                    <p class="error-snippet">{{ entry.latest_error_job.print_error }}</p>
-                {% else %}
-                    <p class="muted-line">No active print errors for this space.</p>
-                {% endif %}
-            </div>
-        </article>
+            <form method="post" action="{{ url_for('staff.mark_manual_slip', label_code=job.label_code) }}" class="inline-action">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="button-link button-link-warn">Mark Manual Slip Made</button>
+            </form>
+        </div>
         {% endfor %}
     </div>
 </section>
-
-<section class="panel collapsible" id="settingsPanel">
-    <h3 class="collapsible-toggle" id="settingsToggle">
-        Operational Settings
-        <span class="toggle-icon" aria-hidden="true">&#9660;</span>
-    </h3>
-    <div class="collapsible-body" id="settingsBody">
-    <p>These settings apply immediately to this station.</p>
-    <form method="post" action="{{ url_for('staff.update_settings') }}" class="kiosk-compact-form">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <label class="checkbox-row">
-            <input type="checkbox" name="completion_email_enabled" {% if operational_settings.completion_email_enabled %}checked{% endif %}>
-            Send completion emails
-        </label>
-        <label class="checkbox-row">
-            <input type="checkbox" name="save_label_files" {% if operational_settings.save_label_files %}checked{% endif %}>
-            Save label images for reprint
-        </label>
-        <label>
-            Keep label images for this many days
-            <input type="number" name="label_retention_days" min="1" max="30" value="{{ operational_settings.label_retention_days }}" required>
-        </label>
-        <label>
-            QR code mode
-            <select name="qr_payload_mode">
-                <option value="url" {% if operational_settings.qr_payload_mode == 'url' %}selected{% endif %}>Open staff page link (recommended for iPad/phone)</option>
-                <option value="id" {% if operational_settings.qr_payload_mode == 'id' %}selected{% endif %}>Print ID only (recommended for USB scanner)</option>
-            </select>
-        </label>
-        <p class="muted-line">Current email provider: <strong>{{ email_provider }}</strong></p>
-        <p class="muted-line">QR base URL: <strong>{{ kiosk_base_url or "not configured" }}</strong></p>
-        <p class="muted-line">Retention cleanup removes labels from yesterday or earlier when set to 1 day.</p>
-        <p class="muted-line">For iPad/phone scanning, set QR mode to link and ensure <code>KIOSK_BASE_URL</code> points to a Pi-reachable address.</p>
-        {% if qr_link_url_warning %}
-            <p class="muted-line warning-line"><strong>Warning:</strong> QR links currently use localhost/127.0.0.1 and may not open on iPad/phone.</p>
-        {% endif %}
-        <div class="form-actions">
-            <button type="submit">Save Settings</button>
-        </div>
-    </form>
-    </div>
-</section>
+{% endif %}
 
 <section class="panel">
     <h3>In Progress</h3>
@@ -220,22 +130,6 @@
 
 <script>
     (() => {
-        /* ---- Collapsible settings panel ---- */
-        const settingsToggle = document.getElementById("settingsToggle");
-        const settingsBody = document.getElementById("settingsBody");
-        if (settingsToggle && settingsBody) {
-            const stored = localStorage.getItem("pt_settings_open");
-            const isOpen = stored === "true";
-            settingsBody.style.display = isOpen ? "" : "none";
-            settingsToggle.querySelector(".toggle-icon").textContent = isOpen ? "\u25B2" : "\u25BC";
-            settingsToggle.addEventListener("click", () => {
-                const nowOpen = settingsBody.style.display === "none";
-                settingsBody.style.display = nowOpen ? "" : "none";
-                settingsToggle.querySelector(".toggle-icon").textContent = nowOpen ? "\u25B2" : "\u25BC";
-                localStorage.setItem("pt_settings_open", String(nowOpen));
-            });
-        }
-
         /* ---- Scan auto-submit with proper debounce (waits for input to stop) ---- */
         const scanInput = document.getElementById("scanValue");
         if (scanInput) {

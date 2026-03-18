@@ -22,6 +22,7 @@ from ..models import (
     JOB_STATUS_FINISHED,
     JOB_STATUS_IN_PROGRESS,
     PRINT_STATUS_DISPATCHED,
+    PRINT_STATUS_MANUAL,
     PRINT_STATUS_PRINTED,
     PRINT_STATUS_QUEUED,
     PrintJob,
@@ -30,16 +31,7 @@ from ..models import (
 from ..routes.patron import build_label_kwargs
 from ..services.label_printer import cleanup_saved_labels, create_and_print_label
 from ..services.notifier import send_completion_email
-from ..services.runtime_settings import (
-    KEY_EMAIL_ENABLED,
-    KEY_LABEL_RETENTION_DAYS,
-    KEY_QR_PAYLOAD_MODE,
-    KEY_SAVE_LABEL_FILES,
-    get_operational_settings,
-    set_bool_setting,
-    set_choice_setting,
-    set_int_setting,
-)
+from ..services.runtime_settings import get_operational_settings
 from ..services.sheets_sync import sync_job_to_google_sheet
 from ..services.spaces import get_spaces, normalize_space_slug
 from ..services.worker_status import build_worker_health
@@ -236,6 +228,29 @@ def _build_space_dashboard() -> tuple[list[dict[str, object]], dict[str, int]]:
     return dashboard_spaces, total_counts
 
 
+def _orphaned_queue_jobs(in_progress_jobs: list[PrintJob]) -> list[PrintJob]:
+    active_workers_by_space = {
+        normalize_space_slug(space_slug): count
+        for space_slug, count in (
+            db.session.query(WorkerNode.space_slug, func.count(WorkerNode.id))
+            .filter(WorkerNode.is_active.is_(True))
+            .group_by(WorkerNode.space_slug)
+            .all()
+        )
+    }
+
+    orphaned: list[PrintJob] = []
+    for job in in_progress_jobs:
+        if job.print_status not in {PRINT_STATUS_QUEUED, PRINT_STATUS_DISPATCHED}:
+            continue
+        space_key = normalize_space_slug(job.space_slug)
+        if active_workers_by_space.get(space_key, 0) > 0:
+            continue
+        orphaned.append(job)
+
+    return orphaned
+
+
 @bp.before_request
 def require_staff_password():
     if request.endpoint in {"staff.login"}:
@@ -281,13 +296,6 @@ def logout():
 @bp.route("/", methods=["GET"])
 def dashboard():
     operational_settings = get_operational_settings()
-    kiosk_base_url = (current_app.config.get("KIOSK_BASE_URL", "") or "").strip()
-    qr_link_url_warning = operational_settings["qr_payload_mode"] == "url" and (
-        not kiosk_base_url
-        or "localhost" in kiosk_base_url.lower()
-        or "127.0.0.1" in kiosk_base_url
-    )
-
     if operational_settings["save_label_files"]:
         deleted = cleanup_saved_labels(
             current_app.config["LABEL_OUTPUT_DIR"],
@@ -297,13 +305,14 @@ def dashboard():
             current_app.logger.info("Removed %s old label image(s).", deleted)
 
     space_display_lookup = _space_display_lookup()
-    space_dashboard, queue_totals = _build_space_dashboard()
+    queue_totals = _build_space_dashboard()[1]
     in_progress = (
         PrintJob.query.options(joinedload(PrintJob.assigned_worker))
         .filter_by(status=JOB_STATUS_IN_PROGRESS)
         .order_by(PrintJob.created_at.asc())
         .all()
     )
+    orphaned_queue_jobs = _orphaned_queue_jobs(in_progress)
     recently_completed = (
         PrintJob.query.options(joinedload(PrintJob.assigned_worker))
         .filter(
@@ -321,48 +330,12 @@ def dashboard():
     return render_template(
         "staff_dashboard.html",
         in_progress=in_progress,
+        orphaned_queue_jobs=orphaned_queue_jobs,
         recently_completed=recently_completed,
-        space_dashboard=space_dashboard,
         space_display_lookup=space_display_lookup,
         queue_totals=queue_totals,
-        operational_settings=operational_settings,
-        email_provider=current_app.config.get("EMAIL_PROVIDER", "smtp"),
-        kiosk_base_url=kiosk_base_url,
-        qr_link_url_warning=qr_link_url_warning,
         label_prefix=label_prefix,
     )
-
-
-@bp.route("/settings", methods=["POST"])
-def update_settings():
-    completion_email_enabled = bool(request.form.get("completion_email_enabled"))
-    save_label_files = bool(request.form.get("save_label_files"))
-    raw_retention = request.form.get("label_retention_days", "1").strip()
-    qr_payload_mode = request.form.get("qr_payload_mode", "url").strip().lower()
-
-    try:
-        label_retention_days = int(raw_retention)
-    except ValueError:
-        flash("Label retention days must be a whole number.", "error")
-        return redirect(url_for("staff.dashboard"))
-
-    set_bool_setting(KEY_EMAIL_ENABLED, completion_email_enabled)
-    set_bool_setting(KEY_SAVE_LABEL_FILES, save_label_files)
-    set_int_setting(
-        KEY_LABEL_RETENTION_DAYS, label_retention_days, minimum=1, maximum=30
-    )
-    set_choice_setting(
-        KEY_QR_PAYLOAD_MODE, qr_payload_mode, choices={"id", "url"}, fallback="url"
-    )
-    db.session.commit()
-
-    if save_label_files:
-        cleanup_saved_labels(
-            current_app.config["LABEL_OUTPUT_DIR"],
-            keep_days=max(1, min(30, label_retention_days)),
-        )
-    flash("Operational settings updated.", "success")
-    return redirect(url_for("staff.dashboard"))
 
 
 @bp.route("/scan", methods=["POST"])
@@ -442,6 +415,30 @@ def cancel_job(label_code: str):
 
     flash(f"{job.label_code} cancelled.", "success")
     return redirect(url_for("staff.dashboard"))
+
+
+@bp.route("/manual-slip/<label_code>", methods=["POST"])
+def mark_manual_slip(label_code: str):
+    job = PrintJob.query.filter_by(label_code=label_code.upper()).first_or_404()
+    if job.is_completed:
+        flash("This job is already completed.", "warning")
+        return redirect(url_for("staff.dashboard"))
+
+    job.print_status = PRINT_STATUS_MANUAL
+    job.manual_fallback_required = False
+    job.printed_at = datetime.now(timezone.utc)
+    job.assigned_worker_id = None
+    if not job.print_error:
+        job.print_error = "Manual slip handled by staff."
+
+    db.session.commit()
+    flash(f"Marked {job.label_code} as manual slip handled.", "success")
+    return redirect(
+        _safe_redirect_target(
+            request.referrer or "",
+            fallback_endpoint="staff.dashboard",
+        )
+    )
 
 
 @bp.route("/complete/<label_code>", methods=["GET", "POST"])

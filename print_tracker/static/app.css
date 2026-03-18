@@ -702,6 +702,48 @@ th {
     padding: 0.35rem 0.7rem;
 }
 
+.queue-alert-panel {
+    border-color: #f2d596;
+    background: linear-gradient(180deg, #fff9ea, #fff4d8);
+}
+
+.queue-alert-list {
+    display: grid;
+    gap: 0.55rem;
+}
+
+.queue-alert-item {
+    border: 1px solid #f2d596;
+    border-radius: 12px;
+    background: #fffdf6;
+    padding: 0.7rem 0.75rem;
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.queue-alert-meta {
+    display: grid;
+    gap: 0.2rem;
+}
+
+.queue-alert-id {
+    font-size: 1rem;
+}
+
+.button-link-warn {
+    border-color: #e2af38;
+    color: #7a5600;
+    background: #fff4d8;
+}
+
+.button-link-warn:hover {
+    background: #fdebbf;
+    border-color: #cc9620;
+}
+
 .print-id-line {
     margin: 0;
     padding: 0.75rem 0.9rem;
