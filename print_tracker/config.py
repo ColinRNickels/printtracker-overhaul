@@ -146,6 +146,9 @@ class Config:
     AGENT_POLL_BATCH_SIZE = _env_int(
         "AGENT_POLL_BATCH_SIZE", default=5, minimum=1, maximum=25
     )
+    WORKER_HEARTBEAT_STALE_SECONDS = _env_int(
+        "WORKER_HEARTBEAT_STALE_SECONDS", default=90, minimum=15, maximum=3600
+    )
 
     # Library hours enforcement
     # When True, patrons cannot submit jobs outside open hours (+ buffer).

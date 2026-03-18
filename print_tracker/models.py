@@ -115,13 +115,29 @@ class PrintJob(db.Model):
 
     @property
     def is_completed(self) -> bool:
-        return self.status in {JOB_STATUS_FINISHED, JOB_STATUS_FAILED, JOB_STATUS_CANCELLED}
+        return self.status in {
+            JOB_STATUS_FINISHED,
+            JOB_STATUS_FAILED,
+            JOB_STATUS_CANCELLED,
+        }
 
     @property
     def print_status_label(self) -> str:
         return PRINT_STATUS_LABELS.get(
             self.print_status, self.print_status.replace("_", " ").title()
         )
+
+    @property
+    def file_name(self) -> str:
+        return self.print_title
+
+    @property
+    def category_label(self) -> str:
+        return JOB_CATEGORY_LABELS.get(self.category, "Other")
+
+    @property
+    def status_label(self) -> str:
+        return JOB_STATUS_LABELS.get(self.status, self.status.replace("_", " ").title())
 
     def mark_print_dispatched(self, *, worker_id: int | None) -> None:
         self.assigned_worker_id = worker_id
@@ -194,18 +210,6 @@ class WorkerNode(db.Model):
         if not raw_token or not self.auth_token_hash:
             return False
         return self.auth_token_hash == _hash_agent_token(raw_token)
-
-    @property
-    def file_name(self) -> str:
-        return self.print_title
-
-    @property
-    def category_label(self) -> str:
-        return JOB_CATEGORY_LABELS.get(self.category, "Other")
-
-    @property
-    def status_label(self) -> str:
-        return JOB_STATUS_LABELS.get(self.status, self.status.replace("_", " ").title())
 
 
 class AppSetting(db.Model):

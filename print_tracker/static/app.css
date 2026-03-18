@@ -481,6 +481,129 @@ button:hover {
     font-size: 0.86rem;
 }
 
+.summary-chip.compact {
+    padding: 0.55rem 0.65rem;
+}
+
+.space-status-grid {
+    display: grid;
+    gap: 0.75rem;
+}
+
+.space-card {
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 0.9rem;
+    display: grid;
+    gap: 0.75rem;
+    background: linear-gradient(180deg, #fff, var(--ncsu-gray-50));
+}
+
+.space-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: start;
+    gap: 0.75rem;
+}
+
+.space-card-header h4 {
+    margin: 0;
+}
+
+.space-queue-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 0.5rem;
+}
+
+.worker-list {
+    display: grid;
+    gap: 0.55rem;
+}
+
+.worker-row {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: #fff;
+    padding: 0.75rem;
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    align-items: start;
+    flex-wrap: wrap;
+}
+
+.worker-meta {
+    display: grid;
+    gap: 0.2rem;
+    justify-items: start;
+}
+
+.health-badge,
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 28px;
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.82rem;
+    font-weight: 700;
+    border: 1px solid transparent;
+    white-space: nowrap;
+}
+
+.health-online,
+.print-status-printed,
+.status-finished {
+    color: var(--success);
+    background: #eef9f1;
+    border-color: #c7ead2;
+}
+
+.health-stale,
+.print-status-dispatched,
+.status-cancelled {
+    color: var(--warning);
+    background: #fff7e8;
+    border-color: #f2d596;
+}
+
+.health-offline,
+.print-status-failed,
+.print-status-manual,
+.status-failed {
+    color: var(--danger);
+    background: #fff1f2;
+    border-color: #f3c4c7;
+}
+
+.print-status-queued {
+    color: var(--brand-strong);
+    background: #fff1f1;
+    border-color: #f0c3c3;
+}
+
+.print-status-not-requested {
+    color: var(--muted);
+    background: var(--ncsu-gray-50);
+    border-color: var(--line);
+}
+
+.troubleshooting-card {
+    border-top: 1px solid var(--line);
+    padding-top: 0.75rem;
+    display: grid;
+    gap: 0.35rem;
+}
+
+.error-snippet,
+.job-card-alert {
+    color: var(--danger);
+    font-size: 0.88rem;
+    line-height: 1.4;
+}
+
 /* ================================================================
    Tables — scroll horizontally on phone
    ================================================================ */
@@ -577,6 +700,16 @@ th {
     min-height: 40px;
     font-size: 0.88rem;
     padding: 0.35rem 0.7rem;
+}
+
+.print-id-line {
+    margin: 0;
+    padding: 0.75rem 0.9rem;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: #fff;
+    font-size: 1.05rem;
+    font-weight: 700;
 }
 
 /* ================================================================
@@ -1035,6 +1168,10 @@ nav a.nav-active {
     color: var(--success);
 }
 
+.warning-heading {
+    color: var(--warning);
+}
+
 .success-cta {
     margin-top: 1rem;
 }
@@ -1104,18 +1241,21 @@ nav a.nav-active {
    Status text variants for completed jobs
    ================================================================ */
 .status-finished {
-    color: var(--success);
     font-weight: 600;
 }
 
 .status-failed {
-    color: var(--danger);
     font-weight: 600;
 }
 
 .status-cancelled {
-    color: var(--warning);
     font-weight: 600;
+}
+
+@media (min-width: 768px) {
+    .space-status-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
 }
 
 /* ================================================================

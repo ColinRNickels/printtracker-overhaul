@@ -11,6 +11,8 @@ from flask import (
     session,
     url_for,
 )
+from sqlalchemy import func
+from sqlalchemy.orm import joinedload
 from werkzeug.security import check_password_hash
 
 from ..extensions import db, limiter
@@ -19,7 +21,11 @@ from ..models import (
     JOB_STATUS_FAILED,
     JOB_STATUS_FINISHED,
     JOB_STATUS_IN_PROGRESS,
+    PRINT_STATUS_DISPATCHED,
+    PRINT_STATUS_PRINTED,
+    PRINT_STATUS_QUEUED,
     PrintJob,
+    WorkerNode,
 )
 from ..routes.patron import build_label_kwargs
 from ..services.label_printer import cleanup_saved_labels, create_and_print_label
@@ -35,6 +41,8 @@ from ..services.runtime_settings import (
     set_int_setting,
 )
 from ..services.sheets_sync import sync_job_to_google_sheet
+from ..services.spaces import get_spaces, normalize_space_slug
+from ..services.worker_status import build_worker_health
 
 bp = Blueprint("staff", __name__, url_prefix="/staff")
 STAFF_SESSION_KEY = "staff_authenticated"
@@ -104,6 +112,130 @@ def _build_completion_form_data(form_data: dict | None = None) -> dict:
     return defaults
 
 
+def _space_display_lookup() -> dict[str, str]:
+    return {
+        normalize_space_slug(space["slug"]): space["display_name"]
+        for space in get_spaces()
+    }
+
+
+def _worker_dashboard_rows() -> list[dict[str, object]]:
+    workers = (
+        WorkerNode.query.filter_by(is_active=True)
+        .order_by(WorkerNode.space_slug.asc(), WorkerNode.display_name.asc())
+        .all()
+    )
+    now = datetime.now(timezone.utc)
+    return [
+        {
+            "worker": worker,
+            "health": build_worker_health(worker, now=now),
+        }
+        for worker in workers
+    ]
+
+
+def _queue_counts_by_space() -> tuple[dict[str, dict[str, int]], dict[str, int]]:
+    rows = (
+        db.session.query(
+            PrintJob.space_slug,
+            PrintJob.print_status,
+            func.count(PrintJob.id),
+        )
+        .filter(PrintJob.status == JOB_STATUS_IN_PROGRESS)
+        .group_by(PrintJob.space_slug, PrintJob.print_status)
+        .all()
+    )
+    counts_by_space: dict[str, dict[str, int]] = {}
+    total_counts = {
+        PRINT_STATUS_QUEUED: 0,
+        PRINT_STATUS_DISPATCHED: 0,
+        PRINT_STATUS_PRINTED: 0,
+        "manual_fallback": 0,
+    }
+
+    for space_slug, print_status, count in rows:
+        space_key = normalize_space_slug(space_slug)
+        space_counts = counts_by_space.setdefault(space_key, {})
+        space_counts[print_status] = count
+        if print_status in total_counts:
+            total_counts[print_status] += count
+
+    manual_rows = (
+        db.session.query(PrintJob.space_slug, func.count(PrintJob.id))
+        .filter(
+            PrintJob.status == JOB_STATUS_IN_PROGRESS,
+            PrintJob.manual_fallback_required.is_(True),
+        )
+        .group_by(PrintJob.space_slug)
+        .all()
+    )
+    for space_slug, count in manual_rows:
+        space_key = normalize_space_slug(space_slug)
+        counts_by_space.setdefault(space_key, {})["manual_fallback"] = count
+        total_counts["manual_fallback"] += count
+
+    return counts_by_space, total_counts
+
+
+def _latest_error_by_space() -> dict[str, PrintJob]:
+    jobs = (
+        PrintJob.query.options(joinedload(PrintJob.assigned_worker))
+        .filter(
+            PrintJob.status == JOB_STATUS_IN_PROGRESS,
+            PrintJob.print_error.isnot(None),
+        )
+        .order_by(PrintJob.print_dispatched_at.desc(), PrintJob.created_at.desc())
+        .all()
+    )
+    errors: dict[str, PrintJob] = {}
+    for job in jobs:
+        errors.setdefault(normalize_space_slug(job.space_slug), job)
+    return errors
+
+
+def _build_space_dashboard() -> tuple[list[dict[str, object]], dict[str, int]]:
+    worker_rows = _worker_dashboard_rows()
+    counts_by_space, total_counts = _queue_counts_by_space()
+    latest_error_by_space = _latest_error_by_space()
+
+    workers_by_space: dict[str, list[dict[str, object]]] = {}
+    online_workers = 0
+    for row in worker_rows:
+        worker = row["worker"]
+        health = row["health"]
+        space_key = normalize_space_slug(worker.space_slug)
+        workers_by_space.setdefault(space_key, []).append(row)
+        if health["state"] == "online":
+            online_workers += 1
+
+    dashboard_spaces: list[dict[str, object]] = []
+    for space in get_spaces():
+        space_key = normalize_space_slug(space["slug"])
+        workers = workers_by_space.get(space_key, [])
+        queue_counts = counts_by_space.get(space_key, {})
+        dashboard_spaces.append(
+            {
+                "space": space,
+                "workers": workers,
+                "has_online_worker": any(
+                    row["health"]["state"] == "online" for row in workers
+                ),
+                "queue_counts": {
+                    "queued": queue_counts.get(PRINT_STATUS_QUEUED, 0),
+                    "dispatched": queue_counts.get(PRINT_STATUS_DISPATCHED, 0),
+                    "printed": queue_counts.get(PRINT_STATUS_PRINTED, 0),
+                    "manual_fallback": queue_counts.get("manual_fallback", 0),
+                },
+                "latest_error_job": latest_error_by_space.get(space_key),
+            }
+        )
+
+    total_counts["online_workers"] = online_workers
+    total_counts["configured_spaces"] = len(dashboard_spaces)
+    return dashboard_spaces, total_counts
+
+
 @bp.before_request
 def require_staff_password():
     if request.endpoint in {"staff.login"}:
@@ -164,14 +296,20 @@ def dashboard():
         if deleted:
             current_app.logger.info("Removed %s old label image(s).", deleted)
 
+    space_display_lookup = _space_display_lookup()
+    space_dashboard, queue_totals = _build_space_dashboard()
     in_progress = (
-        PrintJob.query.filter_by(status=JOB_STATUS_IN_PROGRESS)
+        PrintJob.query.options(joinedload(PrintJob.assigned_worker))
+        .filter_by(status=JOB_STATUS_IN_PROGRESS)
         .order_by(PrintJob.created_at.asc())
         .all()
     )
     recently_completed = (
-        PrintJob.query.filter(
-            PrintJob.status.in_([JOB_STATUS_FINISHED, JOB_STATUS_FAILED, JOB_STATUS_CANCELLED])
+        PrintJob.query.options(joinedload(PrintJob.assigned_worker))
+        .filter(
+            PrintJob.status.in_(
+                [JOB_STATUS_FINISHED, JOB_STATUS_FAILED, JOB_STATUS_CANCELLED]
+            )
         )
         .order_by(PrintJob.completed_at.desc())
         .limit(25)
@@ -184,6 +322,9 @@ def dashboard():
         "staff_dashboard.html",
         in_progress=in_progress,
         recently_completed=recently_completed,
+        space_dashboard=space_dashboard,
+        space_display_lookup=space_display_lookup,
+        queue_totals=queue_totals,
         operational_settings=operational_settings,
         email_provider=current_app.config.get("EMAIL_PROVIDER", "smtp"),
         kiosk_base_url=kiosk_base_url,

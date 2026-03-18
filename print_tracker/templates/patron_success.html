@@ -2,7 +2,8 @@
 {% block title %}Print Registered — Print Tracker{% endblock %}
 {% block content %}
 <section class="panel kiosk-compact">
-    <h2 class="success-heading">You're All Set</h2>
+    {% set needs_staff_help = job.manual_fallback_required or job.print_status in ['failed', 'manual'] %}
+    <h2 class="success-heading{% if needs_staff_help %} warning-heading{% endif %}">{% if needs_staff_help %}Talk To Staff{% else %}You're All Set{% endif %}</h2>
     <p class="muted-line">Location: <strong>{{ selected_space.display_name }}</strong></p>
     {% if label_result and label_result.queued %}
         <p class="status-line success">Your print has been queued for {{ selected_space.display_name }}.</p>
@@ -10,11 +11,11 @@
     {% elif label_result and label_result.printed %}
         <p class="status-line success">Your label is printing now.</p>
     {% elif label_result and label_result.image_path %}
-        <p class="status-line success">Your print has been registered.</p>
-        <p class="muted-line">Label was saved but not sent to a printer. Ask staff for your label.</p>
+        <p class="status-line warning">Your print was registered, but the label needs staff help.</p>
+        <p class="muted-line">Label was saved but not sent to a printer. Talk to staff and show them your Print ID so they can make a print slip.</p>
     {% else %}
-        <p class="status-line success">Your print has been registered.</p>
-        <p class="muted-line">No label was printed. Ask staff for next steps.</p>
+        <p class="status-line warning">Your print was registered, but the label did not print.</p>
+        <p class="muted-line">Talk to staff and show them your Print ID so they can make a print slip for your print.</p>
     {% endif %}
 
     <ol class="next-steps">
@@ -25,22 +26,27 @@
             <li>Pick up the printed label from the label printer.</li>
             <li>Place the label next to your print on the printer bed.</li>
         {% else %}
-            <li>Ask staff to help you label your print.</li>
+            <li>Stay on this screen and show staff your Print ID.</li>
+            <li>Ask staff for a manual print slip before leaving your print.</li>
         {% endif %}
         <li>You'll get an email at <strong>{{ job.user_email }}</strong> when your print is finished or if there's an issue.</li>
     </ol>
 
-    <p class="muted-line">Print ID: {{ job.label_code }} &middot; {{ job.file_name }}</p>
+    <p class="print-id-line">Print ID: {{ job.label_code }} &middot; {{ job.file_name }}</p>
 
-    <p class="muted-line" id="countdown">This screen will reset in <span id="seconds">10</span>s</p>
-    <script>
-        (function() {
-            var s = 10, el = document.getElementById('seconds');
-            var t = setInterval(function() {
-                s--; el.textContent = s;
-                if (s <= 0) { clearInterval(t); window.location.href = "{{ reset_url }}"; }
-            }, 1000);
-        })();
-    </script>
+    {% if not needs_staff_help %}
+        <p class="muted-line" id="countdown">This screen will reset in <span id="seconds">10</span>s</p>
+        <script>
+            (function() {
+                var s = 10, el = document.getElementById('seconds');
+                var t = setInterval(function() {
+                    s--; el.textContent = s;
+                    if (s <= 0) { clearInterval(t); window.location.href = "{{ reset_url }}"; }
+                }, 1000);
+            })();
+        </script>
+    {% else %}
+        <p class="muted-line">This screen will stay here until staff finishes helping you.</p>
+    {% endif %}
 </section>
 {% endblock %}
