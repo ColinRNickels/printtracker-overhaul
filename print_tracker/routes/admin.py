@@ -155,7 +155,9 @@ def dashboard():
         for row in worker_registry_all
         if row["worker"].is_active and row["health"]["state"] in {"stale", "offline"}
     )
-    inactive_count = sum(1 for row in worker_registry_all if not row["worker"].is_active)
+    inactive_count = sum(
+        1 for row in worker_registry_all if not row["worker"].is_active
+    )
     space_filter_options = [
         {
             "value": normalize_space_slug(space["slug"]),
@@ -258,7 +260,8 @@ def bulk_worker_action():
         target_ids = [
             row["worker"].id
             for row in rows
-            if row["worker"].is_active and row["health"]["state"] in {"stale", "offline"}
+            if row["worker"].is_active
+            and row["health"]["state"] in {"stale", "offline"}
         ]
         if target_ids:
             WorkerNode.query.filter(WorkerNode.id.in_(target_ids)).update(
